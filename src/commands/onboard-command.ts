@@ -11,8 +11,8 @@ const logger = getLogger("OnboardCommand");
 
 const INPUTS = [
     {
-        name: "config",
-        description: "Path to the onboarding config JSON file (default: .sateng/onboarding.json)",
+        name: "configOrSheet",
+        description: "Path to the onboarding config JSON file, or Google Sheet URL/ID (default: .sateng/onboarding.json)",
         schema: z.string().optional(),
         argument: true,
     },
@@ -31,7 +31,33 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
     public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         const cwd = process.env.SATENG_ORIGINAL_CWD ?? process.cwd();
-        const configPath = inputs.config ? resolve(inputs.config) : resolve(cwd, ".sateng/onboarding.json");
+        const arg = inputs.configOrSheet;
+
+        const isGoogleSheet = arg && (
+            arg.includes("docs.google.com/spreadsheets") ||
+            /^[a-zA-Z0-9-_]{44}$/.test(arg)
+        );
+
+        if (isGoogleSheet) {
+            const spreadsheetId = arg.includes("docs.google.com/spreadsheets")
+                ? arg.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1] || arg
+                : arg;
+
+            logger.info(`Running onboarding sync directly from Google Sheet ID: ${spreadsheetId}`);
+            try {
+                const parsedConfig = {
+                    onboardingSheets: [
+                        { spreadsheetId }
+                    ]
+                };
+                await this.onboardService.sync(parsedConfig, cwd);
+            } catch (err) {
+                logger.error(`Failed to execute onboarding sync from Google Sheet: ${(err as Error).message}`);
+            }
+            return;
+        }
+
+        const configPath = arg ? resolve(arg) : resolve(cwd, ".sateng/onboarding.json");
 
         logger.info(`Loading onboarding configuration from: ${configPath}`);
 

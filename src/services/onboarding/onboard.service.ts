@@ -59,6 +59,11 @@ export const OnboardGoogleSheetsConfig = z.object({
     range: z.string().optional(),
 });
 
+export const OnboardSheetLinksConfig = z.object({
+    spreadsheetId: z.string(),
+    range: z.string().optional(),
+});
+
 export const OnboardProjectConfig = z.object({
     confluence: OnboardConfluenceProjectConfig.optional(),
     jira: OnboardJiraProjectConfig.optional(),
@@ -68,6 +73,7 @@ export const OnboardProjectConfig = z.object({
         })
         .optional(),
     googleSheets: OnboardGoogleSheetsConfig.optional(),
+    onboardingSheets: z.array(OnboardSheetLinksConfig).optional(),
 });
 
 export const OnboardConfigSchema = z.object({
@@ -90,6 +96,7 @@ export const OnboardConfigSchema = z.object({
         })
         .optional(),
     googleSheets: OnboardGoogleSheetsConfig.optional(),
+    onboardingSheets: z.array(OnboardSheetLinksConfig).optional(),
     projects: z.record(z.string(), OnboardProjectConfig).optional(),
 });
 
@@ -149,6 +156,20 @@ export class OnboardService {
     ) { }
 
     public async sync(config: OnboardConfig, cwd: string): Promise<void> {
+        // Resolve onboarding sheets links
+        const globalSheetConfigs = config.onboardingSheets || [];
+        const projectSheetConfigs = Object.entries(config.projects || {}).flatMap(
+            ([projectName, projectConfig]) =>
+                projectConfig.onboardingSheets?.map((sheetConfig) => ({
+                    ...sheetConfig,
+                    projectName,
+                })) || []
+        );
+        const allSheetConfigs = [...globalSheetConfigs, ...projectSheetConfigs];
+        const sheetResolved = allSheetConfigs.length > 0
+            ? await this.resolveTasksFromSheets(allSheetConfigs)
+            : { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
+
         // Collect Confluence tasks
         const globalConfluenceTasks =
             config.confluence?.pages?.map((pageEntry) => ({
@@ -226,6 +247,7 @@ export class OnboardService {
             ...globalConfluenceTasks,
             ...globalSpacePages,
             ...projectConfluenceTasks,
+            ...sheetResolved.confluenceTasks,
         ];
 
         // Collect Jira Tasks
@@ -274,7 +296,11 @@ export class OnboardService {
             Promise.resolve([] as JiraTask[]),
         );
 
-        const jiraTasks: JiraTask[] = [...globalJiraTasks, ...projectJiraTasks];
+        const jiraTasks: JiraTask[] = [
+            ...globalJiraTasks,
+            ...projectJiraTasks,
+            ...sheetResolved.jiraTasks,
+        ];
 
         // Collect Google Tasks
         const globalGoogleTasks = config.googleDocs?.docs?.map((docEntry) => ({ docEntry })) || [];
@@ -282,7 +308,11 @@ export class OnboardService {
             ([projectName, projectConfig]) =>
                 projectConfig.googleDocs?.docs?.map((docEntry) => ({ docEntry, projectName })) || [],
         );
-        const googleTasks: GoogleDocTask[] = [...globalGoogleTasks, ...projectGoogleTasks];
+        const googleTasks: GoogleDocTask[] = [
+            ...globalGoogleTasks,
+            ...projectGoogleTasks,
+            ...sheetResolved.googleTasks,
+        ];
 
         // Run executions
         if (confluenceTasks.length > 0) {
@@ -354,7 +384,14 @@ export class OnboardService {
             }
         }
 
-        const sheetsCount = (globalSheetConfig ? 1 : 0) + projectSheets.length;
+        // Google Sheets dynamically resolved from cell links
+        if (sheetResolved.sheetTasks && sheetResolved.sheetTasks.length > 0) {
+            for (const t of sheetResolved.sheetTasks) {
+                await this.executeGoogleSheetsTasks({ spreadsheetId: t.spreadsheetId }, cwd, t.projectName);
+            }
+        }
+
+        const sheetsCount = (globalSheetConfig ? 1 : 0) + projectSheets.length + (sheetResolved.sheetTasks?.length || 0);
 
         if (confluenceTasks.length === 0 && jiraTasks.length === 0 && googleTasks.length === 0 && sheetsCount === 0) {
             logger.warn("No Confluence pages, Jira tickets, Google Documents, or Google Sheets configured to fetch.");
@@ -660,5 +697,117 @@ export class OnboardService {
         } catch {
             return null;
         }
+    }
+
+    private parseGoogleSheetUrl(urlStr: string): string | null {
+        try {
+            const url = new URL(urlStr);
+            if (!url.hostname.includes("docs.google.com")) return null;
+            const match = url.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+            return match ? match[1] : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private async resolveTasksFromSheets(
+        sheetConfigs: Array<{ spreadsheetId: string; range?: string; projectName?: string }>,
+    ): Promise<{
+        confluenceTasks: ConfluenceTask[];
+        jiraTasks: JiraTask[];
+        googleTasks: GoogleDocTask[];
+        sheetTasks: Array<{ spreadsheetId: string; projectName?: string }>;
+    }> {
+        const results = await Promise.all(
+            sheetConfigs.map(async (sheetConfig) => {
+                const { spreadsheetId, range, projectName } = sheetConfig;
+                try {
+                    const spreadsheet = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
+                    
+                    // Determine which tabs to read
+                    const rangesToFetch = range 
+                        ? [range] 
+                        : (spreadsheet.sheets || []).map(s => s.title).filter((t): t is string => !!t);
+
+                    if (rangesToFetch.length === 0) {
+                        rangesToFetch.push("Sheet1");
+                    }
+
+                    // Fetch values for all target ranges in a single batch call
+                    const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, rangesToFetch);
+                    const valueRanges = batchData.valueRanges || [];
+
+                    const confluenceTasks: ConfluenceTask[] = [];
+                    const jiraTasks: JiraTask[] = [];
+                    const googleTasks: GoogleDocTask[] = [];
+                    const sheetTasks: Array<{ spreadsheetId: string; projectName?: string }> = [];
+
+                    valueRanges.forEach((vr) => {
+                        // Extract tab title from range property (e.g. "Sheet1!A1:Z100" -> "Sheet1")
+                        const tabTitle = vr.range?.split("!")[0]?.replace(/^'|'$/g, "") || "Sheet1";
+                        // If configured with a global project name, use it; otherwise use the tab title as the project name
+                        const resolvedProjectName = projectName ?? tabTitle;
+
+                        const allRows = vr.values || [];
+                        allRows.forEach((row) => {
+                            row.forEach((cell) => {
+                                if (typeof cell === "string" && (cell.startsWith("http://") || cell.startsWith("https://"))) {
+                                    const trimCell = cell.trim();
+                                    const confUrl = this.parseConfluenceUrl(trimCell);
+                                    if (confUrl) {
+                                        confluenceTasks.push({
+                                            pageEntry: { id: confUrl.pageId },
+                                            projectName: resolvedProjectName,
+                                            baseUrl: confUrl.baseUrl,
+                                        });
+                                        return;
+                                    }
+                                    const jiraUrl = this.parseJiraUrl(trimCell);
+                                    if (jiraUrl) {
+                                        jiraTasks.push({
+                                            ticketEntry: { key: jiraUrl.ticketKey },
+                                            projectName: resolvedProjectName,
+                                            baseUrl: jiraUrl.baseUrl,
+                                        });
+                                        return;
+                                    }
+                                    const docUrl = this.parseGoogleDocUrl(trimCell);
+                                    if (docUrl) {
+                                        googleTasks.push({
+                                            docEntry: { id: docUrl },
+                                            projectName: resolvedProjectName,
+                                        });
+                                        return;
+                                    }
+                                    const sheetUrl = this.parseGoogleSheetUrl(trimCell);
+                                    if (sheetUrl) {
+                                        sheetTasks.push({
+                                            spreadsheetId: sheetUrl,
+                                            projectName: resolvedProjectName,
+                                        });
+                                        return;
+                                    }
+                                }
+                            });
+                        });
+                    });
+
+                    return { confluenceTasks, jiraTasks, googleTasks, sheetTasks };
+                } catch (err) {
+                    logger.error(`Failed to read onboarding Google Sheet ${spreadsheetId}: ${(err as Error).message}`);
+                    return { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
+                }
+            })
+        );
+
+        return results.reduce(
+            (acc, curr) => ({
+                confluenceTasks: [...acc.confluenceTasks, ...curr.confluenceTasks],
+                jiraTasks: [...acc.jiraTasks, ...curr.jiraTasks],
+                googleTasks: [...acc.googleTasks, ...curr.googleTasks],
+                sheetTasks: [...acc.sheetTasks, ...curr.sheetTasks],
+            }),
+            { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] }
+        );
     }
 }

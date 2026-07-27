@@ -1,34 +1,38 @@
 {
-    "_comment": "This is a configuration template for project onboarding.",
+    "_comment": "This is a configuration template for project onboarding. Replace placeholders with actual values.",
     "confluence": {
-        "baseUrl": "https://saturam.atlassian.net"
+        "baseUrl": "https://your-domain.atlassian.net"
     },
     "jira": {
-        "baseUrl": "https://saturam.atlassian.net"
+        "baseUrl": "https://your-domain.atlassian.net"
     },
     "projects": {
-        "ProjectA": {
+        "ExampleProject": {
             "confluence": {
                 "pages": [
-                    "231145593"
+                    "123456789"
                 ],
-                "space": "Alkem"
+                "space": "PROJ"
             },
             "jira": {
                 "tickets": [
-                    "DB-826"
+                    "PROJ-123"
                 ]
             },
             "googleDocs": {
                 "docs": [
-                    "1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN",
-                    "1eZNRa26LEjxWhYvMhAnHwUMUZYG9OxXfX5p6jCKsM0w"
+                    "your-google-doc-id-here"
                 ]
             },
             "googleSheets": {
-                "spreadsheetId": "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
-                "range": "Team Onboarding"
-            }
+                "spreadsheetId": "your-google-sheet-id-here",
+                "range": "Sheet1!A1:E100"
+            },
+            "onboardingSheets": [
+                {
+                    "spreadsheetId": "your-onboarding-links-sheet-id-here"
+                }
+            ]
         }
     }
 }

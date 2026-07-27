@@ -278,4 +278,152 @@ describe("OnboardService", () => {
             expect(writeFile).toHaveBeenCalled();
         });
     });
+
+    describe("sync onboardingSheets document link resolution", () => {
+        it("should parse spreadsheet cell values for Confluence, Jira, and Google Doc links and sync them", async () => {
+            const config = {
+                onboardingSheets: [
+                    {
+                        spreadsheetId: "sheet-links-id",
+                        range: "LinksSheet!A:B",
+                    },
+                ],
+            };
+
+            mockGoogleDrive.getSpreadsheetMetadata.mockImplementation(async (id: string) => {
+                if (id === "sheet-links-id") {
+                    return {
+                        spreadsheetId: "sheet-links-id",
+                        title: "Links Spreadsheet",
+                        sheets: [{ title: "LinksSheet" }],
+                    } as any;
+                }
+                if (id === "another-nested-sheet-id") {
+                    return {
+                        spreadsheetId: "another-nested-sheet-id",
+                        title: "Nested Sheet",
+                        sheets: [{ title: "Sheet1" }],
+                    } as any;
+                }
+                return {} as any;
+            });
+
+            mockGoogleDrive.batchGetSpreadsheetValues.mockImplementation(async (id: string, ranges: string[]) => {
+                if (id === "sheet-links-id") {
+                    return {
+                        valueRanges: [
+                            {
+                                range: "LinksSheet!A:B",
+                                values: [
+                                    ["Jira issue", "https://saturam.atlassian.net/browse/DB-826"],
+                                    ["Confluence page", "https://saturam.atlassian.net/wiki/spaces/Alkem/pages/231145593"],
+                                    ["Google Doc", "https://docs.google.com/document/d/1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN"],
+                                    ["Google Sheet", "https://docs.google.com/spreadsheets/d/another-nested-sheet-id/edit"],
+                                    ["Some non-link text", "some random data"],
+                                ],
+                            },
+                        ],
+                    } as any;
+                }
+                if (id === "another-nested-sheet-id") {
+                    return {
+                        valueRanges: [
+                            {
+                                range: "Sheet1",
+                                values: [
+                                    ["header1"],
+                                    ["val1"],
+                                ],
+                            },
+                        ],
+                    } as any;
+                }
+                return {} as any;
+            });
+
+            mockJiraSource.fetch.mockResolvedValue(
+                makeDoc({ id: "DB-826", source: "jira", title: "DB-826 Ticket" })
+            );
+            mockConfluenceSource.fetch.mockResolvedValue(
+                makeDoc({ id: "231145593", source: "confluence", title: "Confluence Page" })
+            );
+            mockGoogleDriveSource.fetch.mockResolvedValue(
+                makeDoc({ id: "1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN", source: "google-drive", title: "Google Doc Spec" })
+            );
+
+            await service.sync(config, "/mock/cwd");
+
+            expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("sheet-links-id");
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("sheet-links-id", ["LinksSheet!A:B"]);
+
+            expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("another-nested-sheet-id");
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("another-nested-sheet-id", ["Sheet1"]);
+
+            expect(mockJiraSource.fetch).toHaveBeenCalledWith("DB-826", { baseUrl: "https://saturam.atlassian.net" });
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", { baseUrl: "https://saturam.atlassian.net" });
+            expect(mockGoogleDriveSource.fetch).toHaveBeenCalledWith("1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN");
+
+            expect(mkdir).toHaveBeenCalled();
+            expect(writeFile).toHaveBeenCalled();
+        });
+
+        it("should parse spreadsheet cell values across all tabs when range is not specified, mapping tab names to project names", async () => {
+            const config = {
+                onboardingSheets: [
+                    {
+                        spreadsheetId: "multi-tab-sheet-id",
+                    },
+                ],
+            };
+
+            const mockMeta = {
+                spreadsheetId: "multi-tab-sheet-id",
+                title: "Multi-tab Onboarding",
+                sheets: [
+                    { title: "ProjectAlpha" },
+                    { title: "ProjectBeta" },
+                ],
+            } as any;
+
+            mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue(mockMeta);
+            mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
+                valueRanges: [
+                    {
+                        range: "ProjectAlpha!A1:Z100",
+                        values: [
+                            ["Jira issue A", "https://saturam.atlassian.net/browse/DB-826"],
+                        ],
+                    },
+                    {
+                        range: "ProjectBeta!A1:Z100",
+                        values: [
+                            ["Confluence page B", "https://saturam.atlassian.net/wiki/spaces/Alkem/pages/231145593"],
+                        ],
+                    },
+                ],
+            });
+
+            mockJiraSource.fetch.mockResolvedValue(
+                makeDoc({ id: "DB-826", source: "jira", title: "DB-826 Ticket" })
+            );
+            mockConfluenceSource.fetch.mockResolvedValue(
+                makeDoc({ id: "231145593", source: "confluence", title: "Confluence Page" })
+            );
+
+            await service.sync(config, "/mock/cwd");
+
+            expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("multi-tab-sheet-id");
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("multi-tab-sheet-id", [
+                "ProjectAlpha",
+                "ProjectBeta",
+            ]);
+
+            // Verify that resolved tasks were parsed with correct projectNames (i.e. tab titles)
+            expect(mockJiraSource.fetch).toHaveBeenCalledWith("DB-826", { baseUrl: "https://saturam.atlassian.net" });
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", { baseUrl: "https://saturam.atlassian.net" });
+
+            expect(mkdir).toHaveBeenCalled();
+            expect(writeFile).toHaveBeenCalled();
+        });
+    });
 });

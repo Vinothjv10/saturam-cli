@@ -19,6 +19,7 @@ This will configure:
 - AI provider (Anthropic, OpenAI, Gemini, Bedrock, Grok, DeepSeek, Ollama, OpenRouter)
 - API keys
 - SCM provider (GitHub, Bitbucket, or GitLab)
+- Integration credentials (Atlassian Jira/Confluence, Google Drive/Docs/Sheets)
 
 ## Commands
 
@@ -79,11 +80,25 @@ sat-cli add-skill code-review --tool cursor
 
 ### `sat-cli init`
 
-Initialize configuration for a project.
+Initialize configuration for a project (AI providers, default model, SCM credentials, Atlassian integrations, and Google Drive integrations).
 
 ```bash
 sat-cli init
 ```
+
+### `sat-cli onboard`
+
+Sync project onboarding documentation locally from Atlassian (Jira & Confluence) and Google Drive (Docs & Sheets).
+
+```bash
+# Sync using local config file (.sateng/onboarding.json)
+sat-cli onboard
+
+# Sync directly from a Google Sheet URL or ID
+sat-cli onboard <spreadsheet-url-or-id>
+```
+
+For more details on onboarding sync configuration and features, see [ONBOARDING.md](file:///root/saturam/saturam-cli/ONBOARDING.md).
 
 ## Bitbucket
 
@@ -323,6 +338,18 @@ All settings can also be provided via environment variables, which take priority
 | `BITBUCKET_TOKEN`     | Bitbucket API token (create at Atlassian account → Security → API tokens)      |
 | `GITLAB_TOKEN`        | GitLab personal access token (`api` scope required)                             |
 | `GITLAB_INSTANCE_URL` | Base URL for self-hosted GitLab (e.g. `https://git.example.com`)                |
+
+**Integration services (Onboarding & Knowledge Retrieval)**
+
+| Variable              | Description                                                                     |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `ATLASSIAN_EMAIL`     | Atlassian account email (username for general Jira & Confluence access)         |
+| `ATLASSIAN_TOKEN`     | Atlassian API token (for general Jira & Confluence access)                       |
+| `CONFLUENCE_EMAIL`    | Confluence-specific account email (overrides `ATLASSIAN_EMAIL`)                 |
+| `CONFLUENCE_TOKEN`    | Confluence-specific API token (overrides `ATLASSIAN_TOKEN`)                     |
+| `JIRA_EMAIL`          | Jira-specific account email (overrides `ATLASSIAN_EMAIL`)                       |
+| `JIRA_TOKEN`          | Jira-specific API token (overrides `ATLASSIAN_TOKEN`)                           |
+| `GOOGLE_ACCESS_TOKEN` | Google OAuth access token (for Google Drive, Docs, and Sheets access)           |
 
 ## License
 
