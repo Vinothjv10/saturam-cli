@@ -5,6 +5,7 @@ export interface ParsedPRUrl {
     owner: string;
     repo: string;
     prNumber: number;
+    instanceUrl?: string;
 }
 
 const GITHUB_PR_REGEX = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/;
@@ -12,10 +13,19 @@ const BITBUCKET_PR_REGEX = /bitbucket\.org\/([^/]+)\/([^/]+)\/pull-requests\/(\d
 // GitLab MR URLs are identified by the "/-/merge_requests/" path structure, which is GitLab-specific.
 // Matches against the URL pathname only (after the host) so the host is never captured.
 // Supports self-hosted instances and any depth of sub-group nesting.
-const GITLAB_MR_REGEX = /^\/([^?#]+)\/-\/merge_requests\/(\d+)/;
+const GITLAB_MR_REGEX = /^\/(.+\/[^/?#]+)\/-\/merge_requests\/(\d+)(?:[/?#]|$)/;
+
+function normalizeUrl(url: string): string {
+    const trimmed = url.trim();
+    if (!/^[a-zA-Z]+:\/\//.test(trimmed)) {
+        return "https://" + trimmed;
+    }
+    return trimmed;
+}
 
 export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
-    const ghMatch = url.match(GITHUB_PR_REGEX);
+    const normalized = normalizeUrl(url);
+    const ghMatch = normalized.match(GITHUB_PR_REGEX);
     if (ghMatch) {
         return {
             provider: SCMProvider.GITHUB,
@@ -25,7 +35,7 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
         };
     }
 
-    const bbMatch = url.match(BITBUCKET_PR_REGEX);
+    const bbMatch = normalized.match(BITBUCKET_PR_REGEX);
     if (bbMatch) {
         return {
             provider: SCMProvider.BITBUCKET,
@@ -37,10 +47,13 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
 
     // Parse pathname separately so the host is never included in the captured path.
     let pathname: string;
+    let instanceUrl: string | undefined;
     try {
-        pathname = new URL(url).pathname;
+        const parsedUrl = new URL(normalized);
+        pathname = parsedUrl.pathname;
+        instanceUrl = `${parsedUrl.protocol}//${parsedUrl.host}`;
     } catch {
-        pathname = url; // fall back for non-standard URLs (e.g. during tests with partial strings)
+        pathname = normalized; // fall back for non-standard URLs (e.g. during tests with partial strings)
     }
     const glMatch = pathname.match(GITLAB_MR_REGEX);
     if (glMatch) {
@@ -53,6 +66,7 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
             owner,
             repo,
             prNumber: parseInt(glMatch[2], 10),
+            instanceUrl,
         };
     }
 
@@ -60,10 +74,11 @@ export function parsePullRequestUrl(url: string): ParsedPRUrl | null {
 }
 
 export function isPullRequestUrl(url: string): boolean {
-    if (GITHUB_PR_REGEX.test(url) || BITBUCKET_PR_REGEX.test(url)) return true;
+    const normalized = normalizeUrl(url);
+    if (GITHUB_PR_REGEX.test(normalized) || BITBUCKET_PR_REGEX.test(normalized)) return true;
     try {
-        return GITLAB_MR_REGEX.test(new URL(url).pathname);
+        return GITLAB_MR_REGEX.test(new URL(normalized).pathname);
     } catch {
-        return GITLAB_MR_REGEX.test(url);
+        return GITLAB_MR_REGEX.test(normalized);
     }
 }

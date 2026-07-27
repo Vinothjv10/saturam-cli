@@ -8,7 +8,7 @@ This document summarizes the onboarding integrations, sample responses, normaliz
 
 Each integration service wraps target REST APIs and handles authorization internally.
 
-### Confluence ([confluence.service.ts](file:///root/saturam/saturam-cli/src/integrations/confluence/services/confluence.service.ts))
+### Confluence ([confluence.service.ts](src/integrations/confluence/services/confluence.service.ts))
 * **`getPage(baseUrl, pageId)`**
   * *Sample Response:* `{ id: "12345", title: "Page Name", body: { storage: { value: "<p>HTML...</p>" } }, version: { number: 1 }, space: { key: "DS" } }`
 * **`getPageMetadata(baseUrl, pageId)`**
@@ -22,7 +22,7 @@ Each integration service wraps target REST APIs and handles authorization intern
 * **`searchContent(baseUrl, cql)`**
   * *Sample Response:* `{ results: [{ id: "12345", title: "Page Name", type: "page" }] }`
 
-### Jira ([jira.service.ts](file:///root/saturam/saturam-cli/src/integrations/jira/services/jira.service.ts))
+### Jira ([jira.service.ts](src/integrations/jira/services/jira.service.ts))
 * **`getIssue(baseUrl, issueKey)`**
   * *Sample Response:* `{ id: "1000", key: "DS-1", fields: { summary: "Issue summary", status: { name: "To Do" }, description: { type: "doc", content: [...] }, comment: { comments: [...] } } }`
 * **`getIssueMetadata(baseUrl, issueKey)`**
@@ -40,7 +40,7 @@ Each integration service wraps target REST APIs and handles authorization intern
 * **`listChildIssues(baseUrl, parentKey)`**
   * *Sample Response:* `{ issues: [{ key: "DS-10", fields: { summary: "Child subtask" } }] }`
 
-### Google Drive ([google-drive.service.ts](file:///root/saturam/saturam-cli/src/integrations/google-drive/services/google-drive.service.ts))
+### Google Drive ([google-drive.service.ts](src/integrations/google-drive/services/google-drive.service.ts))
 * **`getFileMetadata(fileId)`**
   * *Sample Response:* `{ id: "file-id", name: "Doc Name", mimeType: "application/vnd.google-apps.document", owners: [...] }`
 * **`getFileBinary(fileId)`**
@@ -68,14 +68,14 @@ Each integration service wraps target REST APIs and handles authorization intern
 
 Raw payloads are converted into standard Markdown or structured JSON via adapters implementing the `KnowledgeSource` model:
 
-### Knowledge Source Adapters ([src/services/knowledge/](file:///root/saturam/saturam-cli/src/services/knowledge/))
+### Knowledge Source Adapters ([src/services/knowledge/](src/services/knowledge/))
 * **`ConfluenceKnowledgeSource`**: Syncs Confluence page storage format into Markdown using HTML normalizers.
 * **`JiraKnowledgeSource`**: Syncs Jira issues and their comments into Markdown using ADF normalizers.
 * **`GoogleDriveKnowledgeSource`**: Syncs Google Docs and Drive binary files into Markdown/raw formats.
 
-### Normalizer Services ([src/services/normalizers/](file:///root/saturam/saturam-cli/src/services/normalizers/))
-* **ADF to Markdown ([adf-normalizer.service.ts](file:///root/saturam/saturam-cli/src/services/normalizers/adf-normalizer.service.ts))**: Converts Jira JSON-based Atlassian Document Format (ADF) nodes recursively into clean Markdown text (bold, lists, blockquotes, mentions, etc.).
-* **HTML/XHTML to Markdown ([html-normalizer.service.ts](file:///root/saturam/saturam-cli/src/services/normalizers/html-normalizer.service.ts))**: Parses Confluence storage XHTML and Mammoth HTML strings into clean Markdown blocks, standardizing headers, bullet points, user references, and tables.
+### Normalizer Services ([src/services/normalizers/](src/services/normalizers/))
+* **ADF to Markdown ([adf-normalizer.service.ts](src/services/normalizers/adf-normalizer.service.ts))**: Converts Jira JSON-based Atlassian Document Format (ADF) nodes recursively into clean Markdown text (bold, lists, blockquotes, mentions, etc.).
+* **HTML/XHTML to Markdown ([html-normalizer.service.ts](src/services/normalizers/html-normalizer.service.ts))**: Parses Confluence storage XHTML and Mammoth HTML strings into clean Markdown blocks, standardizing headers, bullet points, user references, and tables.
 * **Google Sheets to JSON**: Fetches rows and cells and saves them as a structured, queryable JSON sidecar list.
 * **Word Documents (.docx)**: Downloads raw access bytes, extracts HTML locally via `mammoth.js`, and normalizes it into Markdown via `HtmlNormalizerService`.
 
@@ -83,7 +83,7 @@ Raw payloads are converted into standard Markdown or structured JSON via adapter
 
 ## 3. Orchestration & Configuration
 
-### Orchestrator ([onboard.service.ts](file:///root/saturam/saturam-cli/src/services/onboarding/onboard.service.ts))
+### Orchestrator ([onboard.service.ts](src/services/onboarding/onboard.service.ts))
 The orchestrator reads project configuration lists, triggers parallel fetch requests, resolves URLs found in Google Sheets, and routes tasks to the appropriate knowledge adapters.
 
 ### Google Sheets URL Resolution & Project Tab Mapping
