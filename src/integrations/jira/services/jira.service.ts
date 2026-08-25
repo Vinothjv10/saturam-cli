@@ -15,7 +15,7 @@ const logger = getLogger("JiraService");
 
 @Service()
 export class JiraService {
-    constructor(private readonly config: ConfigService) { }
+    constructor(private readonly config: ConfigService) {}
 
     // --- Private helpers ---
 
@@ -53,7 +53,9 @@ export class JiraService {
         const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
-            throw new Error(`Failed to fetch Jira issue ${issueKey}: ${response.status} ${response.statusText} - ${text}`);
+            throw new Error(
+                `Failed to fetch Jira issue ${issueKey}: ${response.status} ${response.statusText} - ${text}`,
+            );
         }
 
         return response.json() as Promise<JiraIssueApiResponse>;
@@ -72,7 +74,9 @@ export class JiraService {
         const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
-            throw new Error(`Failed to fetch Jira issue metadata ${issueKey}: ${response.status} ${response.statusText} - ${text}`);
+            throw new Error(
+                `Failed to fetch Jira issue metadata ${issueKey}: ${response.status} ${response.statusText} - ${text}`,
+            );
         }
 
         return response.json() as Promise<JiraIssueApiResponse>;
@@ -85,13 +89,15 @@ export class JiraService {
     public async searchIssues(
         baseUrl: string,
         jql: string,
-        options?: { maxResults?: number; startAt?: number },
+        options?: { maxResults?: number; nextPageToken?: string },
     ): Promise<JiraSearchApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
         const maxResults = options?.maxResults ?? 100;
-        const startAt = options?.startAt ?? 0;
         const fields = "summary,status,assignee,priority,issuetype,labels";
-        const url = `${apiBase}/search/jql?jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&startAt=${startAt}&fields=${encodeURIComponent(fields)}`;
+        const queryParams = `jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&fields=${encodeURIComponent(fields)}`;
+        const url = options?.nextPageToken
+            ? `${apiBase}/search/jql?${queryParams}&nextPageToken=${encodeURIComponent(options.nextPageToken)}`
+            : `${apiBase}/search/jql?${queryParams}`;
 
         logger.debug(`Searching Jira issues via JQL: ${jql}`);
 
@@ -107,7 +113,11 @@ export class JiraService {
     /**
      * Convenience helper — returns only the issue keys from a JQL search.
      */
-    public async searchIssueKeys(baseUrl: string, jql: string, options?: { maxResults?: number }): Promise<string[]> {
+    public async searchIssueKeys(
+        baseUrl: string,
+        jql: string,
+        options?: { maxResults?: number; nextPageToken?: string },
+    ): Promise<string[]> {
         const result = await this.searchIssues(baseUrl, jql, options);
         return (result.issues ?? []).map((issue) => issue.key);
     }
@@ -118,35 +128,29 @@ export class JiraService {
     public async listAllIssuesByJql(baseUrl: string, jql: string): Promise<string[]> {
         const maxResults = 100;
         const MAX_PAGES = 100;
+        const keys: string[] = [];
+        let nextPageToken: string | undefined;
+        let pages = 0;
 
-        const fetchIssueKeys = async (
-            startAt: number,
-            pageCount: number,
-            accumulatedKeys: string[],
-        ): Promise<string[]> => {
-            if (pageCount >= MAX_PAGES) {
-                logger.error(`listAllIssuesByJql: exceeded MAX_PAGES (${MAX_PAGES}) for JQL "${jql}". Partial results returned.`);
-                return accumulatedKeys;
+        do {
+            if (pages++ >= MAX_PAGES) {
+                logger.error(
+                    `listAllIssuesByJql: exceeded MAX_PAGES (${MAX_PAGES}) for JQL "${jql}". Partial results returned.`,
+                );
+                break;
             }
 
-            const result = await this.searchIssues(baseUrl, jql, { startAt, maxResults });
+            const result = await this.searchIssues(baseUrl, jql, { maxResults, nextPageToken });
             const issues = result.issues || [];
             if (issues.length === 0) {
-                return accumulatedKeys;
+                break;
             }
 
-            const nextAccumulated = [...accumulatedKeys, ...issues.map((issue) => issue.key)];
-            if (result.total && startAt + issues.length >= result.total) {
-                return nextAccumulated;
-            }
-            if (issues.length < maxResults) {
-                return nextAccumulated;
-            }
+            keys.push(...issues.map((issue) => issue.key));
+            nextPageToken = result.nextPageToken;
+        } while (nextPageToken);
 
-            return fetchIssueKeys(startAt + maxResults, pageCount + 1, nextAccumulated);
-        };
-
-        return fetchIssueKeys(0, 0, []);
+        return keys;
     }
 
     // --- Project operations ---
@@ -216,9 +220,12 @@ export class JiraService {
     public async listChildIssues(
         baseUrl: string,
         parentKey: string,
-        options?: { maxResults?: number; startAt?: number }
+        options?: { maxResults?: number; nextPageToken?: string },
     ): Promise<JiraSearchApiResponse> {
-        const jql = `parent = ${parentKey} OR "Epic Link" = ${parentKey}`;
+        if (!/^[A-Z][A-Z0-9]*-\d+$/i.test(parentKey)) {
+            throw new Error(`Invalid Jira issue key format: ${parentKey}`);
+        }
+        const jql = `parent = ${parentKey}`;
         return this.searchIssues(baseUrl, jql, options);
     }
 }

@@ -252,9 +252,9 @@ describe("ConfluenceService", () => {
             mockConfigService.getConfluenceCredentials.mockResolvedValue(basicCredentials);
             mockFetchFail(400, "Bad Request", "Invalid CQL");
 
-            await expect(
-                service.searchContent("https://my-company.atlassian.net", "invalid cql !!!"),
-            ).rejects.toThrow("Failed to run Confluence CQL search: 400 Bad Request");
+            await expect(service.searchContent("https://my-company.atlassian.net", "invalid cql !!!")).rejects.toThrow(
+                "Failed to run Confluence CQL search: 400 Bad Request",
+            );
         });
     });
 });

@@ -64,8 +64,6 @@ describe("ConfluenceKnowledgeSource", () => {
     });
 
     it("should throw if baseUrl is missing", async () => {
-        await expect(source.fetch("12345", {})).rejects.toThrow(
-            "No base URL configured for Confluence page: 12345",
-        );
+        await expect(source.fetch("12345", {})).rejects.toThrow("No base URL configured for Confluence page: 12345");
     });
 });

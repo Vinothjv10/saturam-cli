@@ -68,7 +68,7 @@ describe("GoogleDriveService", () => {
             mockFetchFail(404, "Not Found", "File not found");
 
             await expect(service.getFileMetadata("invalidId")).rejects.toThrow(
-                "Failed to fetch metadata for file invalidId: 404 Not Found - File not found"
+                "Failed to fetch metadata for file invalidId: 404 Not Found - File not found",
             );
         });
     });
@@ -95,7 +95,7 @@ describe("GoogleDriveService", () => {
             mockFetchFail(403, "Forbidden", "Permission denied");
 
             await expect(service.getGoogleDoc("docId123")).rejects.toThrow(
-                "Failed to fetch Google Doc docId123: 403 Forbidden - Permission denied"
+                "Failed to fetch Google Doc docId123: 403 Forbidden - Permission denied",
             );
         });
     });
@@ -165,7 +165,9 @@ describe("GoogleDriveService", () => {
             expect(result).toEqual(mockList);
             const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
             // URLSearchParams encodes spaces as + and quotes as %27
-            expect(calledUrl).toContain("q=%27folder123%27+in+parents+and+trashed+%3D+false+and+mimeType+%3D+%27application%2Fvnd.google-apps.document%27");
+            expect(calledUrl).toContain(
+                "q=%27folder123%27+in+parents+and+trashed+%3D+false+and+mimeType+%3D+%27application%2Fvnd.google-apps.document%27",
+            );
             expect(calledUrl).toContain("pageSize=10");
             expect(calledUrl).toContain("pageToken=token_abc");
         });
@@ -193,11 +195,10 @@ describe("GoogleDriveService", () => {
             mockFetchFail(500, "Internal Server Error", "Failure");
 
             await expect(service.getFileBinary("binaryFileId")).rejects.toThrow(
-                "Failed to fetch binary content for file binaryFileId: 500 Internal Server Error - Failure"
+                "Failed to fetch binary content for file binaryFileId: 500 Internal Server Error - Failure",
             );
         });
     });
-
 
     describe("searchFiles", () => {
         it("searches files successfully with standard query and default limit", async () => {
@@ -222,7 +223,7 @@ describe("GoogleDriveService", () => {
             mockFetchFail(400, "Bad Request", "Invalid query");
 
             await expect(service.searchFiles("invalid query")).rejects.toThrow(
-                "Failed to search Google Drive files with query \"invalid query\": 400 Bad Request - Invalid query"
+                'Failed to search Google Drive files with query "invalid query": 400 Bad Request - Invalid query',
             );
         });
     });
@@ -235,9 +236,7 @@ describe("GoogleDriveService", () => {
             const mockSpreadsheet = {
                 spreadsheetId: "sheetId123",
                 properties: { title: "Project Index" },
-                sheets: [
-                    { properties: { title: "Sheet1", sheetId: 0 } }
-                ],
+                sheets: [{ properties: { title: "Sheet1", sheetId: 0 } }],
             };
             mockFetchOk(mockSpreadsheet);
 
@@ -254,7 +253,7 @@ describe("GoogleDriveService", () => {
             mockFetchFail(404, "Not Found", "Spreadsheet not found");
 
             await expect(service.getSpreadsheetData("sheetId123")).rejects.toThrow(
-                "Failed to fetch spreadsheet sheetId123: 404 Not Found - Spreadsheet not found"
+                "Failed to fetch spreadsheet sheetId123: 404 Not Found - Spreadsheet not found",
             );
         });
     });
@@ -272,12 +271,21 @@ describe("GoogleDriveService", () => {
                 spreadsheetId: "sheetId123",
                 properties: { title: "Project Index" },
                 sheets: [
-                    { properties: { title: "Sheet1", sheetId: 0, index: 0, gridProperties: { rowCount: 100, columnCount: 10 }, hidden: false } }
+                    {
+                        properties: {
+                            title: "Sheet1",
+                            sheetId: 0,
+                            index: 0,
+                            gridProperties: { rowCount: 100, columnCount: 10 },
+                            hidden: false,
+                        },
+                    },
                 ],
                 spreadsheetUrl: "https://docs.google.com/spreadsheets/d/sheetId123/edit",
             };
 
-            global.fetch = jest.fn()
+            global.fetch = jest
+                .fn()
                 .mockResolvedValueOnce({
                     ok: true,
                     json: jest.fn().mockResolvedValue(mockDriveResponse),
@@ -296,22 +304,23 @@ describe("GoogleDriveService", () => {
                 owners: [{ displayName: "Vasanth G" }],
                 modifiedTime: "2026-06-09T10:19:08.130Z",
                 createdTime: "2026-06-01T10:00:00.000Z",
-                sheets: [
-                    { sheetId: 0, title: "Sheet1", index: 0, rowCount: 100, columnCount: 10, hidden: false }
-                ]
+                sheets: [{ sheetId: 0, title: "Sheet1", index: 0, rowCount: 100, columnCount: 10, hidden: false }],
             });
 
             const driveCallUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
             const sheetsCallUrl = (global.fetch as jest.Mock).mock.calls[1][0] as string;
 
             expect(driveCallUrl).toContain("https://www.googleapis.com/drive/v3/files/sheetId123");
-            expect(sheetsCallUrl).toBe("https://sheets.googleapis.com/v4/spreadsheets/sheetId123?includeGridData=false");
+            expect(sheetsCallUrl).toBe(
+                "https://sheets.googleapis.com/v4/spreadsheets/sheetId123?includeGridData=false",
+            );
         });
 
         it("throws error when Drive fetch fails", async () => {
             mockConfigService.getGoogleAccessToken.mockResolvedValue("mock_token_123");
 
-            global.fetch = jest.fn()
+            global.fetch = jest
+                .fn()
                 .mockResolvedValueOnce({
                     ok: false,
                     status: 400,
@@ -324,14 +333,15 @@ describe("GoogleDriveService", () => {
                 } as any);
 
             await expect(service.getSpreadsheetMetadata("sheetId123")).rejects.toThrow(
-                "Failed to fetch Drive metadata for spreadsheet sheetId123: 400 Bad Request - Invalid ID"
+                "Failed to fetch Drive metadata for spreadsheet sheetId123: 400 Bad Request - Invalid ID",
             );
         });
 
         it("throws error when Sheets fetch fails", async () => {
             mockConfigService.getGoogleAccessToken.mockResolvedValue("mock_token_123");
 
-            global.fetch = jest.fn()
+            global.fetch = jest
+                .fn()
                 .mockResolvedValueOnce({
                     ok: true,
                     json: jest.fn().mockResolvedValue({}),
@@ -344,7 +354,7 @@ describe("GoogleDriveService", () => {
                 } as any);
 
             await expect(service.getSpreadsheetMetadata("sheetId123")).rejects.toThrow(
-                "Failed to fetch Sheets metadata for spreadsheet sheetId123: 404 Not Found - Not found"
+                "Failed to fetch Sheets metadata for spreadsheet sheetId123: 404 Not Found - Not found",
             );
         });
     });
@@ -356,7 +366,7 @@ describe("GoogleDriveService", () => {
                 spreadsheetId: "sheetId123",
                 valueRanges: [
                     { range: "Sheet1!A1", values: [["Val1"]] },
-                    { range: "Sheet2!B2", values: [["Val2"]] }
+                    { range: "Sheet2!B2", values: [["Val2"]] },
                 ],
             };
             mockFetchOk(mockBatch);
@@ -371,5 +381,3 @@ describe("GoogleDriveService", () => {
         });
     });
 });
-
-

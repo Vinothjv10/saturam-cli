@@ -3,9 +3,18 @@
  * (Jira, Confluence, Google Drive, etc.).
  * Used by KnowledgeSource adapters, OnboardService, and future indexing/ask features.
  */
+
+/** Strongly-typed discriminator for the integration that produced a KnowledgeDocument. */
+export enum KnowledgeSourceType {
+    CONFLUENCE = "confluence",
+    JIRA = "jira",
+    GOOGLE_DOCS = "google-docs",
+    GOOGLE_SHEETS = "google-sheets",
+}
+
 export interface KnowledgeDocument {
     id: string;
-    source: string;
+    source: KnowledgeSourceType;
     title: string;
     content: string;
     url: string;

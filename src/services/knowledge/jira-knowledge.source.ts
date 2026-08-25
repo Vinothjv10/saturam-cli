@@ -3,7 +3,7 @@ import { Service } from "typedi";
 import { JiraService } from "../../integrations/jira/services/jira.service";
 import { JiraComment } from "../../integrations/jira/models/jira.model";
 import { AdfNormalizerService } from "../normalizers/adf-normalizer.service";
-import { KnowledgeDocument, KnowledgeSource } from "./knowledge-source.model";
+import { KnowledgeDocument, KnowledgeSource, KnowledgeSourceType } from "./knowledge-source.model";
 
 const logger = getLogger("JiraKnowledgeSource");
 
@@ -19,12 +19,9 @@ export class JiraKnowledgeSource implements KnowledgeSource {
     constructor(
         private readonly jira: JiraService,
         private readonly adf: AdfNormalizerService,
-    ) { }
+    ) {}
 
-    public async fetch(
-        id: string,
-        options?: { baseUrl?: string },
-    ): Promise<KnowledgeDocument> {
+    public async fetch(id: string, options?: { baseUrl?: string }): Promise<KnowledgeDocument> {
         const baseUrl = options?.baseUrl ?? "";
 
         if (!id) {
@@ -54,9 +51,7 @@ export class JiraKnowledgeSource implements KnowledgeSource {
         // 3. ADF → Markdown via normalizer
         const description = (() => {
             try {
-                return fields?.description
-                    ? this.adf.renderAdfNode(fields.description)
-                    : "";
+                return fields?.description ? this.adf.renderAdfNode(fields.description) : "";
             } catch (err) {
                 logger.error(`Failed to render description ADF for Jira ticket ${id}: ${(err as Error).message}`);
                 return "_Normalization Failed — see logs for details_";
@@ -66,7 +61,7 @@ export class JiraKnowledgeSource implements KnowledgeSource {
         const rawComments: JiraComment[] = fields?.comment?.comments || [];
         const commentsMarkdown = rawComments.map((c) => {
             const author = c.author?.displayName || "User";
-            const date = c.created ? new Date(c.created).toLocaleString() : "";
+            const date = c.created ? new Date(c.created).toISOString() : "";
             const body = (() => {
                 try {
                     return c.body ? this.adf.renderAdfNode(c.body) : "";
@@ -104,7 +99,7 @@ ${commentsMarkdown.length > 0 ? `## Comments\n\n${commentsMarkdown.join("\n")}` 
         // 5. Return KnowledgeDocument
         return {
             id,
-            source: "jira",
+            source: KnowledgeSourceType.JIRA,
             title: summary,
             content,
             url: docUrl,

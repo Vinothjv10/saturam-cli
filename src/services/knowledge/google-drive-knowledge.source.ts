@@ -3,7 +3,7 @@ import { Service } from "typedi";
 import * as mammoth from "mammoth";
 import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
 import { HtmlNormalizerService } from "../normalizers/html-normalizer.service";
-import { KnowledgeDocument, KnowledgeSource } from "./knowledge-source.model";
+import { KnowledgeDocument, KnowledgeSource, KnowledgeSourceType } from "./knowledge-source.model";
 
 const logger = getLogger("GoogleDriveKnowledgeSource");
 
@@ -26,12 +26,9 @@ export class GoogleDriveKnowledgeSource implements KnowledgeSource {
     constructor(
         private readonly googleDrive: GoogleDriveService,
         private readonly html: HtmlNormalizerService,
-    ) { }
+    ) {}
 
-    public async fetch(
-        id: string,
-        _options?: Record<string, unknown>,
-    ): Promise<KnowledgeDocument> {
+    public async fetch(id: string, _options?: Record<string, unknown>): Promise<KnowledgeDocument> {
         if (!id) {
             throw new Error("Google Document ID is missing or invalid.");
         }
@@ -64,7 +61,7 @@ export class GoogleDriveKnowledgeSource implements KnowledgeSource {
                 const buffer = Buffer.from(arrayBuffer);
 
                 // ZIP magic check (DOCX files are ZIP archives starting with PK)
-                if (buffer.length < 2 || buffer[0] !== 0x50 || buffer[1] !== 0x4B) {
+                if (buffer.length < 2 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
                     throw new Error(`File "${id}" does not appear to be a valid DOCX (invalid ZIP header)`);
                 }
 
@@ -88,12 +85,12 @@ export class GoogleDriveKnowledgeSource implements KnowledgeSource {
             logger.warn(`Fetched Google Drive document ${id} ("${title}") contains no content.`);
         }
 
-        const docUrl = `https://docs.google.com/document/d/${id}/edit`;
+        const docUrl = metadata.webViewLink ?? `https://docs.google.com/document/d/${id}/edit`;
 
         // 3. Return KnowledgeDocument
         return {
             id,
-            source: "googleDocs",
+            source: KnowledgeSourceType.GOOGLE_DOCS,
             title,
             content: markdownContent || "",
             url: docUrl,

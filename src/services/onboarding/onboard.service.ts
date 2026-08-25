@@ -1,106 +1,52 @@
 import { mkdir, writeFile } from "fs/promises";
 import { getLogger } from "log4js";
-import { dirname, join, resolve } from "path";
+import { dirname, extname, join, resolve } from "path";
 import pLimit from "p-limit";
 import { Service } from "typedi";
 import { z } from "zod";
 import { ConfluenceService } from "../../integrations/confluence/services/confluence.service";
+import { parseConfluenceUrl } from "../../integrations/confluence/utils/confluence-url.util";
 import { JiraService } from "../../integrations/jira/services/jira.service";
-import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
+import { parseJiraUrl } from "../../integrations/jira/utils/jira-url.util";
+import { parseGoogleDocUrl, parseGoogleSheetUrl } from "../../integrations/google-drive/utils/google-drive-url.util";
 import { ConfigService } from "../config-service";
+import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
 import { JiraKnowledgeSource } from "../knowledge/jira-knowledge.source";
 import { ConfluenceKnowledgeSource } from "../knowledge/confluence-knowledge.source";
 import { GoogleDriveKnowledgeSource } from "../knowledge/google-drive-knowledge.source";
-import { KnowledgeDocument } from "../knowledge/knowledge-source.model";
+import { GoogleSheetsKnowledgeSource } from "../knowledge/google-sheets-knowledge.source";
+import { KnowledgeDocument, KnowledgeSource } from "../knowledge/knowledge-source.model";
 
 const logger = getLogger("OnboardService");
 
 // --- Config Schemas ---
+// --- Config Schemas ---
+// Centralized in config-service.ts. Re-exported here for backward compatibility.
+import {
+    OnboardPageSchema,
+    OnboardTicketSchema,
+    OnboardDocSchema,
+    OnboardConfluenceProjectConfig,
+    OnboardJiraProjectConfig,
+    OnboardGoogleSheetsConfig,
+    OnboardSheetLinksConfig,
+    OnboardProjectConfig,
+    OnboardConfigSchema,
+    OnboardConfig,
+} from "../config-service";
 
-export const OnboardPageSchema = z.union([
-    z.string(),
-    z.object({
-        id: z.string(),
-        outputPath: z.string().optional(),
-    }),
-]);
-
-export const OnboardTicketSchema = z.union([
-    z.string(),
-    z.object({
-        key: z.string(),
-        outputPath: z.string().optional(),
-    }),
-]);
-
-export const OnboardDocSchema = z.union([
-    z.string(),
-    z.object({
-        id: z.string(),
-        outputPath: z.string().optional(),
-    }),
-]);
-
-export const OnboardConfluenceProjectConfig = z.object({
-    baseUrl: z.string().optional(),
-    space: z.string().optional(),
-    pages: z.array(OnboardPageSchema).optional(),
-});
-
-export const OnboardJiraProjectConfig = z.object({
-    baseUrl: z.string().optional(),
-    tickets: z.array(OnboardTicketSchema).optional(),
-    jql: z.string().optional(),
-});
-
-export const OnboardGoogleSheetsConfig = z.object({
-    spreadsheetId: z.string(),
-    /** A1 notation range e.g. "Sheet1!A:E". Defaults to all data in the first sheet. */
-    range: z.string().optional(),
-});
-
-export const OnboardSheetLinksConfig = z.object({
-    spreadsheetId: z.string(),
-    range: z.string().optional(),
-});
-
-export const OnboardProjectConfig = z.object({
-    confluence: OnboardConfluenceProjectConfig.optional(),
-    jira: OnboardJiraProjectConfig.optional(),
-    googleDocs: z
-        .object({
-            docs: z.array(OnboardDocSchema).optional(),
-        })
-        .optional(),
-    googleSheets: OnboardGoogleSheetsConfig.optional(),
-    onboardingSheets: z.array(OnboardSheetLinksConfig).optional(),
-});
-
-export const OnboardConfigSchema = z.object({
-    confluence: z
-        .object({
-            baseUrl: z.string().optional(),
-            pages: z.array(OnboardPageSchema).optional(),
-            spaces: z.array(z.string()).optional(),
-        })
-        .optional(),
-    jira: z
-        .object({
-            baseUrl: z.string().optional(),
-            tickets: z.array(OnboardTicketSchema).optional(),
-        })
-        .optional(),
-    googleDocs: z
-        .object({
-            docs: z.array(OnboardDocSchema).optional(),
-        })
-        .optional(),
-    googleSheets: OnboardGoogleSheetsConfig.optional(),
-    onboardingSheets: z.array(OnboardSheetLinksConfig).optional(),
-    projects: z.record(z.string(), OnboardProjectConfig).optional(),
-});
-
-export type OnboardConfig = z.infer<typeof OnboardConfigSchema>;
+export {
+    OnboardPageSchema,
+    OnboardTicketSchema,
+    OnboardDocSchema,
+    OnboardConfluenceProjectConfig,
+    OnboardJiraProjectConfig,
+    OnboardGoogleSheetsConfig,
+    OnboardSheetLinksConfig,
+    OnboardProjectConfig,
+    OnboardConfigSchema,
+    OnboardConfig,
+};
 
 export interface ConfluenceTask {
     pageEntry: z.infer<typeof OnboardPageSchema>;
@@ -121,22 +67,9 @@ export interface GoogleDocTask {
 
 // --- Internal mapped task types (after URL parsing) ---
 
-interface MappedConfluenceTask {
+interface MappedTask {
     id: string;
     baseUrl?: string;
-    projectName?: string;
-    outputPath?: string;
-}
-
-interface MappedJiraTask {
-    id: string;
-    baseUrl?: string;
-    projectName?: string;
-    outputPath?: string;
-}
-
-interface MappedGoogleDocTask {
-    id: string;
     projectName?: string;
     outputPath?: string;
 }
@@ -144,16 +77,18 @@ interface MappedGoogleDocTask {
 @Service()
 export class OnboardService {
     constructor(
-        // Integration services — needed for Google Sheets (not covered by KnowledgeSource adapters)
+        // Raw integration services — needed for space/JQL resolution (not covered by KnowledgeSource adapters)
         private readonly confluence: ConfluenceService,
         private readonly jira: JiraService,
+        // GoogleDriveService is used for raw batch spreadsheet reads (JSON sidecar + sheet link resolution)
         private readonly googleDrive: GoogleDriveService,
-        private readonly config: ConfigService,
         // KnowledgeSource adapters — own the fetch → normalize → KnowledgeDocument mapping
         private readonly jiraSource: JiraKnowledgeSource,
         private readonly confluenceSource: ConfluenceKnowledgeSource,
         private readonly googleDriveSource: GoogleDriveKnowledgeSource,
-    ) { }
+        private readonly googleSheetsSource: GoogleSheetsKnowledgeSource,
+        private readonly config: ConfigService,
+    ) {}
 
     public async sync(config: OnboardConfig, cwd: string): Promise<void> {
         // Resolve onboarding sheets links
@@ -163,12 +98,13 @@ export class OnboardService {
                 projectConfig.onboardingSheets?.map((sheetConfig) => ({
                     ...sheetConfig,
                     projectName,
-                })) || []
+                })) || [],
         );
         const allSheetConfigs = [...globalSheetConfigs, ...projectSheetConfigs];
-        const sheetResolved = allSheetConfigs.length > 0
-            ? await this.resolveTasksFromSheets(allSheetConfigs)
-            : { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
+        const sheetResolved =
+            allSheetConfigs.length > 0
+                ? await this.resolveTasksFromSheets(allSheetConfigs)
+                : { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
 
         // Collect Confluence tasks
         const globalConfluenceTasks =
@@ -296,11 +232,7 @@ export class OnboardService {
             Promise.resolve([] as JiraTask[]),
         );
 
-        const jiraTasks: JiraTask[] = [
-            ...globalJiraTasks,
-            ...projectJiraTasks,
-            ...sheetResolved.jiraTasks,
-        ];
+        const jiraTasks: JiraTask[] = [...globalJiraTasks, ...projectJiraTasks, ...sheetResolved.jiraTasks];
 
         // Collect Google Tasks
         const globalGoogleTasks = config.googleDocs?.docs?.map((docEntry) => ({ docEntry })) || [];
@@ -317,11 +249,13 @@ export class OnboardService {
         // Run executions
         if (confluenceTasks.length > 0) {
             const mappedTasks = confluenceTasks.map((t) => {
-                const urlParsed =
+                const isUrl =
                     typeof t.pageEntry === "string" &&
-                        (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"))
-                        ? this.parseConfluenceUrl(t.pageEntry)
-                        : null;
+                    (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"));
+                const urlParsed = isUrl ? parseConfluenceUrl(t.pageEntry as string) : null;
+                if (isUrl && !urlParsed) {
+                    throw new Error(`Could not extract a valid page ID from Confluence URL: ${t.pageEntry}`);
+                }
                 return {
                     id: urlParsed ? urlParsed.pageId : typeof t.pageEntry === "string" ? t.pageEntry : t.pageEntry.id,
                     baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
@@ -329,44 +263,71 @@ export class OnboardService {
                     outputPath: typeof t.pageEntry === "string" ? undefined : t.pageEntry.outputPath,
                 };
             });
-            await this.executeConfluenceTasks(mappedTasks, cwd, config.confluence?.baseUrl);
+            await this.executeTasks(
+                this.confluenceSource,
+                mappedTasks,
+                cwd,
+                "Confluence",
+                "confluence",
+                "page(s)",
+                config.confluence?.baseUrl,
+            );
         }
 
         if (jiraTasks.length > 0) {
             const mappedTasks = jiraTasks.map((t) => {
-                const urlParsed =
+                const isUrl =
                     typeof t.ticketEntry === "string" &&
-                        (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"))
-                        ? this.parseJiraUrl(t.ticketEntry)
-                        : null;
+                    (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"));
+                const urlParsed = isUrl ? parseJiraUrl(t.ticketEntry as string) : null;
+                if (isUrl && !urlParsed) {
+                    throw new Error(`Could not extract a valid ticket key from Jira URL: ${t.ticketEntry}`);
+                }
                 return {
                     id: urlParsed
                         ? urlParsed.ticketKey
                         : typeof t.ticketEntry === "string"
-                            ? t.ticketEntry
-                            : t.ticketEntry.key,
+                          ? t.ticketEntry
+                          : t.ticketEntry.key,
                     baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
                     projectName: t.projectName,
                     outputPath: typeof t.ticketEntry === "string" ? undefined : t.ticketEntry.outputPath,
                 };
             });
-            await this.executeJiraTasks(mappedTasks, cwd, config.jira?.baseUrl);
+            await this.executeTasks(
+                this.jiraSource,
+                mappedTasks,
+                cwd,
+                "Jira",
+                "jira",
+                "ticket(s)",
+                config.jira?.baseUrl,
+            );
         }
 
         if (googleTasks.length > 0) {
             const mappedTasks = googleTasks.map((t) => {
-                const urlParsed =
+                const isUrl =
                     typeof t.docEntry === "string" &&
-                        (t.docEntry.startsWith("http://") || t.docEntry.startsWith("https://"))
-                        ? this.parseGoogleDocUrl(t.docEntry)
-                        : null;
+                    (t.docEntry.startsWith("http://") || t.docEntry.startsWith("https://"));
+                const urlParsed = isUrl ? parseGoogleDocUrl(t.docEntry as string) : null;
+                if (isUrl && !urlParsed) {
+                    throw new Error(`Could not extract a valid document ID from Google Doc URL: ${t.docEntry}`);
+                }
                 return {
                     id: urlParsed ? urlParsed : typeof t.docEntry === "string" ? t.docEntry : t.docEntry.id,
                     projectName: t.projectName,
                     outputPath: typeof t.docEntry === "string" ? undefined : t.docEntry.outputPath,
                 };
             });
-            await this.executeGoogleDocsTasks(mappedTasks, cwd);
+            await this.executeTasks(
+                this.googleDriveSource,
+                mappedTasks,
+                cwd,
+                "Google Docs",
+                "google-docs",
+                "document(s)",
+            );
         }
 
         // Google Sheets — read project index sheet if configured
@@ -376,7 +337,7 @@ export class OnboardService {
         }
 
         const projectSheets = Object.entries(config.projects || {}).filter(
-            ([_, projectConfig]) => projectConfig.googleSheets
+            ([_, projectConfig]) => projectConfig.googleSheets,
         );
         for (const [projectName, projectConfig] of projectSheets) {
             if (projectConfig.googleSheets) {
@@ -391,21 +352,38 @@ export class OnboardService {
             }
         }
 
-        const sheetsCount = (globalSheetConfig ? 1 : 0) + projectSheets.length + (sheetResolved.sheetTasks?.length || 0);
+        const sheetsCount =
+            (globalSheetConfig ? 1 : 0) + projectSheets.length + (sheetResolved.sheetTasks?.length || 0);
 
         if (confluenceTasks.length === 0 && jiraTasks.length === 0 && googleTasks.length === 0 && sheetsCount === 0) {
             logger.warn("No Confluence pages, Jira tickets, Google Documents, or Google Sheets configured to fetch.");
         }
     }
 
-    // --- Confluence orchestration (thin: delegate to adapter → writeDoc) ---
+    // --- Generic task executor (replaces executeConfluenceTasks / executeJiraTasks / executeGoogleDocsTasks) ---
 
-    private async executeConfluenceTasks(
-        tasks: MappedConfluenceTask[],
+    /**
+     * Fetches a list of mapped tasks using the provided KnowledgeSource adapter,
+     * deduplicates output paths, and writes each document to disk.
+     *
+     * @param source        - KnowledgeSource adapter (confluence, jira, or google-drive)
+     * @param tasks         - List of mapped tasks with id, baseUrl, projectName, outputPath
+     * @param cwd           - Working directory for resolving custom outputPath values
+     * @param label         - Human-readable label for log messages (e.g. "Confluence")
+     * @param subdir        - Subdirectory under the onboarding dir (e.g. "confluence")
+     * @param unit          - Plural unit name for log summary (e.g. "page(s)")
+     * @param defaultBaseUrl - Fallback base URL when task.baseUrl is not set
+     */
+    private async executeTasks(
+        source: KnowledgeSource,
+        tasks: MappedTask[],
         cwd: string,
+        label: string,
+        subdir: string,
+        unit: string,
         defaultBaseUrl?: string,
     ): Promise<void> {
-        logger.info(`Found ${tasks.length} Confluence page(s) to fetch...`);
+        logger.info(`Found ${tasks.length} ${label} ${unit} to fetch...`);
         const baseOnboardDir = this.resolveBaseOnboardDir();
         const limit = pLimit(5);
         const usedPaths = new Set<string>();
@@ -417,7 +395,9 @@ export class OnboardService {
                     const targetBaseUrl = baseUrl || defaultBaseUrl || "";
 
                     // Delegate fetch + normalize to the adapter
-                    const doc = await this.confluenceSource.fetch(id, { baseUrl: targetBaseUrl });
+                    const doc = targetBaseUrl
+                        ? await source.fetch(id, { baseUrl: targetBaseUrl })
+                        : await source.fetch(id);
 
                     // Determine output path
                     const safeTitle = this.getSafeTitle(doc.title, id);
@@ -425,106 +405,22 @@ export class OnboardService {
                     const candidatePath = outputPath
                         ? resolve(cwd, outputPath)
                         : sanitizedProj
-                            ? join(baseOnboardDir, "confluence", sanitizedProj, `${safeTitle}.md`)
-                            : join(baseOnboardDir, "confluence", `${safeTitle}.md`);
+                          ? join(baseOnboardDir, subdir, sanitizedProj, `${safeTitle}.md`)
+                          : join(baseOnboardDir, subdir, `${safeTitle}.md`);
 
                     const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
                     usedPaths.add(absoluteOutputPath);
 
                     await this.writeDoc(doc, absoluteOutputPath);
-                    logger.info(`✓ Saved Confluence page "${doc.title}" to: ${absoluteOutputPath} (and JSON metadata)`);
-                })
-            )
+                    logger.info(`✓ Saved ${label} "${doc.title}" to: ${absoluteOutputPath} (and JSON metadata)`);
+                }),
+            ),
         );
 
-        this.logResults(results, "Confluence", "page(s)");
+        this.logResults(results, label, unit);
     }
 
-    // --- Jira orchestration (thin: delegate to adapter → writeDoc) ---
-
-    private async executeJiraTasks(
-        tasks: MappedJiraTask[],
-        cwd: string,
-        defaultBaseUrl?: string,
-    ): Promise<void> {
-        logger.info(`Found ${tasks.length} Jira ticket(s) to fetch...`);
-        const baseOnboardDir = this.resolveBaseOnboardDir();
-        const limit = pLimit(5);
-        const usedPaths = new Set<string>();
-
-        const results = await Promise.allSettled(
-            tasks.map((task) =>
-                limit(async () => {
-                    const { id, outputPath, projectName, baseUrl } = task;
-                    const targetBaseUrl = baseUrl || defaultBaseUrl || "";
-
-                    // Delegate fetch + normalize to the adapter
-                    const doc = await this.jiraSource.fetch(id, { baseUrl: targetBaseUrl });
-
-                    // Determine output path
-                    const safeTitle = this.getSafeTitle(doc.title, id);
-                    const sanitizedProj = this.sanitizeProjectName(projectName);
-                    const candidatePath = outputPath
-                        ? resolve(cwd, outputPath)
-                        : sanitizedProj
-                            ? join(baseOnboardDir, "jira", sanitizedProj, `${safeTitle}.md`)
-                            : join(baseOnboardDir, "jira", `${safeTitle}.md`);
-
-                    // Deduplicate colliding output paths
-                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
-                    usedPaths.add(absoluteOutputPath);
-
-                    await this.writeDoc(doc, absoluteOutputPath);
-                    logger.info(`✓ Saved Jira ticket "${doc.title}" to: ${absoluteOutputPath} (and JSON metadata)`);
-                })
-            )
-        );
-
-        this.logResults(results, "Jira", "ticket(s)");
-    }
-
-    // --- Google Docs orchestration (thin: delegate to adapter → writeDoc) ---
-
-    private async executeGoogleDocsTasks(
-        tasks: MappedGoogleDocTask[],
-        cwd: string,
-    ): Promise<void> {
-        logger.info(`Found ${tasks.length} Google Document(s) to fetch...`);
-        const baseOnboardDir = this.resolveBaseOnboardDir();
-        const limit = pLimit(5);
-        const usedPaths = new Set<string>();
-
-        const results = await Promise.allSettled(
-            tasks.map((task) =>
-                limit(async () => {
-                    const { id, outputPath, projectName } = task;
-
-                    // Delegate fetch + normalize to the adapter
-                    const doc = await this.googleDriveSource.fetch(id);
-
-                    // Determine output path
-                    const safeTitle = this.getSafeTitle(doc.title, id);
-                    const sanitizedProj = this.sanitizeProjectName(projectName);
-                    const candidatePath = outputPath
-                        ? resolve(cwd, outputPath)
-                        : sanitizedProj
-                            ? join(baseOnboardDir, "google-docs", sanitizedProj, `${safeTitle}.md`)
-                            : join(baseOnboardDir, "google-docs", `${safeTitle}.md`);
-
-                    // Deduplicate colliding output paths
-                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
-                    usedPaths.add(absoluteOutputPath);
-
-                    await this.writeDoc(doc, absoluteOutputPath);
-                    logger.info(`✓ Saved Google Document "${doc.title}" to: ${absoluteOutputPath}`);
-                })
-            )
-        );
-
-        this.logResults(results, "Google Docs", "document(s)");
-    }
-
-    // --- Google Sheets dedicated task executor ---
+    // --- Google Sheets dedicated task executor (structured data, not a KnowledgeDocument flow) ---
 
     private async executeGoogleSheetsTasks(
         sheetConfig: z.infer<typeof OnboardGoogleSheetsConfig>,
@@ -541,24 +437,10 @@ export class OnboardService {
         const baseOnboardDir = this.resolveBaseOnboardDir();
 
         try {
-            // 1. Fetch spreadsheet metadata to get the title and available sheet tabs
-            const spreadsheet = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
-            const spreadsheetTitle = spreadsheet.title ?? spreadsheetId;
+            // Delegate fetch to the GoogleSheetsKnowledgeSource adapter
+            const doc = await this.googleSheetsSource.fetch(spreadsheetId, { range });
+            const spreadsheetTitle = doc.title;
 
-            // 2. Determine range — default to first sheet all columns
-            const firstSheetTitle = spreadsheet.sheets?.[0]?.title ?? "Sheet1";
-            const effectiveRange = range ?? `${firstSheetTitle}`;
-
-            // 3. Fetch cell values
-            const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, [effectiveRange]);
-            const allRows = batchData.valueRanges?.[0]?.values ?? [];
-
-            if (allRows.length === 0) {
-                logger.warn(`Google Sheet "${spreadsheetTitle}" range "${effectiveRange}" returned no data.`);
-                return;
-            }
-
-            // 4. Persist raw sheet as JSON sidecar for downstream tooling
             const safeTitle = this.getSafeTitle(spreadsheetTitle, spreadsheetId);
             const sanitizedProj = this.sanitizeProjectName(projectName);
 
@@ -566,6 +448,18 @@ export class OnboardService {
                 ? join(baseOnboardDir, "google-sheets", sanitizedProj)
                 : join(baseOnboardDir, "google-sheets");
             const jsonPath = join(outputDir, `${safeTitle}.json`);
+
+            // Fetch raw rows for the JSON sidecar via GoogleDriveService directly
+            const spreadsheetMeta = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
+            const firstSheetTitle = spreadsheetMeta.sheets?.[0]?.title ?? "Sheet1";
+            const effectiveRange = range ?? firstSheetTitle;
+            const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, [effectiveRange]);
+            const allRows = batchData.valueRanges?.[0]?.values ?? [];
+
+            if (allRows.length === 0) {
+                logger.warn(`Google Sheet "${spreadsheetTitle}" range "${effectiveRange}" returned no data.`);
+                return;
+            }
 
             const sidecar = {
                 spreadsheetId,
@@ -580,7 +474,9 @@ export class OnboardService {
             await mkdir(outputDir, { recursive: true });
             await writeFile(jsonPath, JSON.stringify(sidecar, null, 4), "utf8");
 
-            logger.info(`✓ Saved Google Sheet "${spreadsheetTitle}" index (${allRows.length - 1} data row(s)) to: ${jsonPath}`);
+            logger.info(
+                `✓ Saved Google Sheet "${spreadsheetTitle}" index (${allRows.length - 1} data row(s)) to: ${jsonPath}`,
+            );
         } catch (err) {
             logger.error(`✗ Failed to read Google Sheet ${spreadsheetId}: ${(err as Error).message}`);
         }
@@ -594,7 +490,9 @@ export class OnboardService {
      *   - <absoluteOutputPath>.json  — JSON metadata sidecar (no content field)
      */
     private async writeDoc(doc: KnowledgeDocument, absoluteOutputPath: string): Promise<void> {
-        const absoluteJsonPath = absoluteOutputPath.replace(/\.md$/, ".json");
+        const absoluteJsonPath = absoluteOutputPath.endsWith(".md")
+            ? absoluteOutputPath.slice(0, -3) + ".json"
+            : absoluteOutputPath + ".json";
         const { content: _content, ...metadataOnly } = doc;
 
         await mkdir(dirname(absoluteOutputPath), { recursive: true });
@@ -604,11 +502,7 @@ export class OnboardService {
 
     // --- Logging helper ---
 
-    private logResults(
-        results: PromiseSettledResult<void>[],
-        label: string,
-        unit: string,
-    ): void {
+    private logResults(results: PromiseSettledResult<void>[], label: string, unit: string): void {
         results.forEach((res) => {
             if (res.status === "rejected") {
                 logger.error(`✗ ${label} sync task failed: ${res.reason.message}`);
@@ -622,10 +516,12 @@ export class OnboardService {
     // --- Private utilities ---
 
     private getSafeTitle(title: string, fallbackId: string): string {
-        return title
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/(^-|-$)/g, "") || fallbackId;
+        return (
+            title
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/(^-|-$)/g, "") || fallbackId
+        );
     }
 
     private resolveBaseOnboardDir(): string {
@@ -635,79 +531,28 @@ export class OnboardService {
 
     private sanitizeProjectName(projectName?: string): string | undefined {
         if (!projectName) return undefined;
-        return projectName
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/(^-|-$)/g, "") || "default";
+        return (
+            projectName
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/(^-|-$)/g, "") || "default"
+        );
     }
 
     private getUniqueOutputPath(basePath: string, usedPaths: Set<string>): string {
-        const getUnique = (path: string, suffix: number): string => {
-            if (!usedPaths.has(path)) return path;
-            const nextPath = path.replace(/(-\d+)?\.md$/, `-${suffix}.md`);
+        const getUnique = (pathStr: string, suffix: number): string => {
+            if (!usedPaths.has(pathStr)) return pathStr;
+            const nextPath = pathStr.endsWith(".md")
+                ? pathStr.replace(/(-\d+)?\.md$/, `-${suffix}.md`)
+                : (() => {
+                      const ext = extname(pathStr);
+                      const baseName = pathStr.slice(0, pathStr.length - ext.length);
+                      const cleanBaseName = baseName.replace(/(-\d+)?$/, `-${suffix}`);
+                      return cleanBaseName + ext;
+                  })();
             return getUnique(nextPath, suffix + 1);
         };
         return getUnique(basePath, 2);
-    }
-
-    private parseConfluenceUrl(urlStr: string): { baseUrl: string; pageId: string } | null {
-        try {
-            const url = new URL(urlStr);
-            const spacePageMatch = url.pathname.match(/\/wiki\/spaces\/[^/]+\/pages\/(\d+)/i);
-            if (spacePageMatch) {
-                return { baseUrl: url.origin, pageId: spacePageMatch[1] };
-            }
-            const pageIdQuery = url.searchParams.get("pageId");
-            if (pageIdQuery) {
-                return { baseUrl: url.origin, pageId: pageIdQuery };
-            }
-            const generalPageMatch = url.pathname.match(/\/pages\/(\d+)/i);
-            if (generalPageMatch) {
-                return { baseUrl: url.origin, pageId: generalPageMatch[1] };
-            }
-            return null;
-        } catch {
-            return null;
-        }
-    }
-
-    private parseJiraUrl(urlStr: string): { baseUrl: string; ticketKey: string } | null {
-        try {
-            const url = new URL(urlStr);
-            const browseMatch = url.pathname.match(/\/browse\/([A-Z0-9]+-\d+)/i);
-            if (browseMatch) {
-                return { baseUrl: url.origin, ticketKey: browseMatch[1].toUpperCase() };
-            }
-            const issuesMatch = url.pathname.match(/\/issues\/([A-Z0-9]+-\d+)/i);
-            if (issuesMatch) {
-                return { baseUrl: url.origin, ticketKey: issuesMatch[1].toUpperCase() };
-            }
-            return null;
-        } catch {
-            return null;
-        }
-    }
-
-    private parseGoogleDocUrl(urlStr: string): string | null {
-        try {
-            const url = new URL(urlStr);
-            if (!url.hostname.includes("docs.google.com")) return null;
-            const match = url.pathname.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
-            return match ? match[1] : null;
-        } catch {
-            return null;
-        }
-    }
-
-    private parseGoogleSheetUrl(urlStr: string): string | null {
-        try {
-            const url = new URL(urlStr);
-            if (!url.hostname.includes("docs.google.com")) return null;
-            const match = url.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-            return match ? match[1] : null;
-        } catch {
-            return null;
-        }
     }
 
     private async resolveTasksFromSheets(
@@ -723,11 +568,11 @@ export class OnboardService {
                 const { spreadsheetId, range, projectName } = sheetConfig;
                 try {
                     const spreadsheet = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
-                    
+
                     // Determine which tabs to read
-                    const rangesToFetch = range 
-                        ? [range] 
-                        : (spreadsheet.sheets || []).map(s => s.title).filter((t): t is string => !!t);
+                    const rangesToFetch = range
+                        ? [range]
+                        : (spreadsheet.sheets || []).map((s) => s.title).filter((t): t is string => !!t);
 
                     if (rangesToFetch.length === 0) {
                         rangesToFetch.push("Sheet1");
@@ -751,9 +596,12 @@ export class OnboardService {
                         const allRows = vr.values || [];
                         allRows.forEach((row) => {
                             row.forEach((cell) => {
-                                if (typeof cell === "string" && (cell.startsWith("http://") || cell.startsWith("https://"))) {
+                                if (
+                                    typeof cell === "string" &&
+                                    (cell.startsWith("http://") || cell.startsWith("https://"))
+                                ) {
                                     const trimCell = cell.trim();
-                                    const confUrl = this.parseConfluenceUrl(trimCell);
+                                    const confUrl = parseConfluenceUrl(trimCell);
                                     if (confUrl) {
                                         confluenceTasks.push({
                                             pageEntry: { id: confUrl.pageId },
@@ -762,7 +610,7 @@ export class OnboardService {
                                         });
                                         return;
                                     }
-                                    const jiraUrl = this.parseJiraUrl(trimCell);
+                                    const jiraUrl = parseJiraUrl(trimCell);
                                     if (jiraUrl) {
                                         jiraTasks.push({
                                             ticketEntry: { key: jiraUrl.ticketKey },
@@ -771,7 +619,7 @@ export class OnboardService {
                                         });
                                         return;
                                     }
-                                    const docUrl = this.parseGoogleDocUrl(trimCell);
+                                    const docUrl = parseGoogleDocUrl(trimCell);
                                     if (docUrl) {
                                         googleTasks.push({
                                             docEntry: { id: docUrl },
@@ -779,7 +627,7 @@ export class OnboardService {
                                         });
                                         return;
                                     }
-                                    const sheetUrl = this.parseGoogleSheetUrl(trimCell);
+                                    const sheetUrl = parseGoogleSheetUrl(trimCell);
                                     if (sheetUrl) {
                                         sheetTasks.push({
                                             spreadsheetId: sheetUrl,
@@ -797,7 +645,7 @@ export class OnboardService {
                     logger.error(`Failed to read onboarding Google Sheet ${spreadsheetId}: ${(err as Error).message}`);
                     return { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
                 }
-            })
+            }),
         );
 
         return results.reduce(
@@ -807,7 +655,7 @@ export class OnboardService {
                 googleTasks: [...acc.googleTasks, ...curr.googleTasks],
                 sheetTasks: [...acc.sheetTasks, ...curr.sheetTasks],
             }),
-            { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] }
+            { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] },
         );
     }
 }

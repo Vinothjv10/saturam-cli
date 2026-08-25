@@ -16,7 +16,7 @@ const logger = getLogger("GoogleDriveService");
 
 @Service()
 export class GoogleDriveService {
-    constructor(private readonly config: ConfigService) { }
+    constructor(private readonly config: ConfigService) {}
 
     private async getHeaders(): Promise<Record<string, string>> {
         const token = await this.config.getGoogleAccessToken();
@@ -33,7 +33,8 @@ export class GoogleDriveService {
      * Includes name, mimeType, modifiedTime, owners, size, and webViewLink.
      */
     public async getFileMetadata(fileId: string): Promise<GoogleDriveFileMetadata> {
-        const fields = "id,name,mimeType,modifiedTime,createdTime,owners,size,webViewLink,webContentLink,parents,trashed";
+        const fields =
+            "id,name,mimeType,modifiedTime,createdTime,owners,size,webViewLink,webContentLink,parents,trashed";
         const url = `${GOOGLE_DRIVE_API}/files/${fileId}?fields=${encodeURIComponent(fields)}`;
 
         logger.debug(`Fetching file metadata for ${fileId}: ${url}`);
@@ -126,8 +127,6 @@ export class GoogleDriveService {
         return response.arrayBuffer();
     }
 
-
-
     // --- File Listing ---
 
     /**
@@ -139,9 +138,10 @@ export class GoogleDriveService {
         options?: { limit?: number; pageToken?: string; mimeType?: string },
     ): Promise<GoogleDriveFileListApiResponse> {
         const limit = options?.limit ?? 100;
+        const escapedFolderId = folderId.replace(/'/g, "\\'");
         const query = options?.mimeType
-            ? `'${folderId}' in parents and trashed = false and mimeType = '${options.mimeType}'`
-            : `'${folderId}' in parents and trashed = false`;
+            ? `'${escapedFolderId}' in parents and trashed = false and mimeType = '${options.mimeType.replace(/'/g, "\\'")}'`
+            : `'${escapedFolderId}' in parents and trashed = false`;
 
         const fields = "nextPageToken,files(id,name,mimeType,modifiedTime,owners,webViewLink,size)";
         const params = new URLSearchParams({
@@ -215,7 +215,7 @@ export class GoogleDriveService {
      */
     public async getSpreadsheetMetadata(spreadsheetId: string): Promise<GoogleSpreadsheetMetadataResponse> {
         const driveUrl = `${GOOGLE_DRIVE_API}/files/${spreadsheetId}?fields=${encodeURIComponent(
-            "owners,modifiedTime,createdTime"
+            "owners,modifiedTime,createdTime",
         )}`;
         const sheetsUrl = `${GOOGLE_SHEETS_API}/${spreadsheetId}?includeGridData=false`;
 
@@ -223,8 +223,8 @@ export class GoogleDriveService {
 
         const headers = await this.getHeaders();
         const [driveRes, sheetsRes] = await Promise.all([
-            fetch(driveUrl, { headers }),
-            fetch(sheetsUrl, { headers }),
+            fetchWithTimeout(driveUrl, { headers }),
+            fetchWithTimeout(sheetsUrl, { headers }),
         ]);
 
         if (!driveRes.ok) {

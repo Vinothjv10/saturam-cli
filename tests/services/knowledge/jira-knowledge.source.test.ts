@@ -68,9 +68,7 @@ describe("JiraKnowledgeSource", () => {
                             created: "2026-07-01T10:00:00Z",
                             body: {
                                 type: "doc",
-                                content: [
-                                    { type: "paragraph", content: [{ type: "text", text: "LGTM!" }] },
-                                ],
+                                content: [{ type: "paragraph", content: [{ type: "text", text: "LGTM!" }] }],
                             },
                         },
                     ],
@@ -91,8 +89,6 @@ describe("JiraKnowledgeSource", () => {
     });
 
     it("should throw if baseUrl is missing", async () => {
-        await expect(source.fetch("TST-1", {})).rejects.toThrow(
-            "No base URL configured for Jira ticket: TST-1",
-        );
+        await expect(source.fetch("TST-1", {})).rejects.toThrow("No base URL configured for Jira ticket: TST-1");
     });
 });

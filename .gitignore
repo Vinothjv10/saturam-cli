@@ -8,3 +8,5 @@ built/
 logs/
 *.log
 .DS_Store
+.sateng/
+.sateng/*

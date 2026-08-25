@@ -173,7 +173,6 @@ export interface GoogleSpreadsheetMetadataResponse {
     }>;
 }
 
-
 /**
  * Raw response from GET /sheets/v4/spreadsheets/{id}/values/{range}.
  * Returned by getSheetValues().

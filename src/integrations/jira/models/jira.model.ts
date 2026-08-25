@@ -55,9 +55,8 @@ export interface JiraSearchIssue {
 }
 
 export interface JiraSearchApiResponse {
-    total?: number;
-    maxResults?: number;
-    startAt?: number;
+    nextPageToken?: string;
+    isLast?: boolean;
     issues?: JiraSearchIssue[];
 }
 

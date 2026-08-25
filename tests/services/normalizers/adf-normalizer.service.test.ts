@@ -76,9 +76,7 @@ describe("AdfNormalizerService", () => {
                 content: [
                     {
                         type: "listItem",
-                        content: [
-                            { type: "paragraph", content: [{ type: "text", text: "Bullet Item One" }] },
-                        ],
+                        content: [{ type: "paragraph", content: [{ type: "text", text: "Bullet Item One" }] }],
                     },
                 ],
             };
@@ -116,11 +114,60 @@ describe("AdfNormalizerService", () => {
         it("should render blockquotes", () => {
             const adf = {
                 type: "blockquote",
-                content: [
-                    { type: "paragraph", content: [{ type: "text", text: "Important notice." }] },
-                ],
+                content: [{ type: "paragraph", content: [{ type: "text", text: "Important notice." }] }],
             };
             expect(adfNormalizer.renderAdfNode(adf)).toContain("> Important notice.");
+        });
+
+        it("should render tables correctly", () => {
+            const adf = {
+                type: "table",
+                content: [
+                    {
+                        type: "tableRow",
+                        content: [
+                            { type: "tableHeader", content: [{ type: "text", text: "Header 1" }] },
+                            { type: "tableHeader", content: [{ type: "text", text: "Header 2" }] },
+                        ],
+                    },
+                    {
+                        type: "tableRow",
+                        content: [
+                            { type: "tableCell", content: [{ type: "text", text: "Cell 1" }] },
+                            { type: "tableCell", content: [{ type: "text", text: "Cell 2" }] },
+                        ],
+                    },
+                ],
+            };
+            const md = adfNormalizer.renderAdfNode(adf);
+            expect(md).toContain("| Header 1 | Header 2 |");
+            expect(md).toContain("| --- | --- |");
+            expect(md).toContain("| Cell 1 | Cell 2 |");
+        });
+
+        it("should render inlineCards", () => {
+            const adf = {
+                type: "inlineCard",
+                attrs: { url: "https://saturam.atlassian.net/browse/DB-123" },
+            };
+            expect(adfNormalizer.renderAdfNode(adf)).toBe(
+                "[https://saturam.atlassian.net/browse/DB-123](https://saturam.atlassian.net/browse/DB-123)",
+            );
+        });
+
+        it("should render media nodes inside mediaSingle", () => {
+            const adf = {
+                type: "mediaSingle",
+                content: [
+                    {
+                        type: "media",
+                        attrs: { id: "attach-id-abc", type: "image" },
+                    },
+                ],
+            };
+            expect(adfNormalizer.renderAdfNode(adf)).toBe(
+                "![Image Attachment: attach-id-abc](attachment:attach-id-abc)",
+            );
         });
     });
 });

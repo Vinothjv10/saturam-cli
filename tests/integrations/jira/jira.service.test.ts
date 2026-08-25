@@ -16,8 +16,6 @@ describe("JiraService", () => {
         service = new JiraService(mockConfigService);
     });
 
-
-
     // JiraService API client tests — verify raw API responses are returned without conversion
     describe("getIssue", () => {
         let originalFetch: typeof fetch;
@@ -198,7 +196,6 @@ describe("JiraService", () => {
             mockConfigService.getJiraCredentials.mockResolvedValue({ token: "bearer-token-val" });
 
             const mockSearchResponse = {
-                total: 2,
                 issues: [{ key: "ENG-201" }, { key: "ENG-202" }],
             };
 
@@ -212,13 +209,53 @@ describe("JiraService", () => {
 
             expect(result).toEqual(["ENG-201", "ENG-202"]);
             expect(mockFetch).toHaveBeenCalledWith(
-                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&startAt=0&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
+                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
                         Authorization: "Bearer bearer-token-val",
                     },
                 }),
+            );
+        });
+
+        it("should auto-paginate using nextPageToken in listAllIssuesByJql", async () => {
+            mockConfigService.getJiraCredentials.mockResolvedValue({ token: "bearer-token-val" });
+
+            const firstPageResponse = {
+                issues: [{ key: "ENG-201" }, { key: "ENG-202" }],
+                nextPageToken: "token-page-2",
+            };
+            const secondPageResponse = {
+                issues: [{ key: "ENG-203" }],
+                nextPageToken: undefined,
+            };
+
+            const mockFetch = jest
+                .fn()
+                .mockResolvedValueOnce({
+                    ok: true,
+                    json: jest.fn().mockResolvedValue(firstPageResponse),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    json: jest.fn().mockResolvedValue(secondPageResponse),
+                });
+            global.fetch = mockFetch as any;
+
+            const result = await service.listAllIssuesByJql("https://saturam.atlassian.net", "project = ENG");
+
+            expect(result).toEqual(["ENG-201", "ENG-202", "ENG-203"]);
+            expect(mockFetch).toHaveBeenCalledTimes(2);
+            expect(mockFetch).toHaveBeenNthCalledWith(
+                1,
+                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
+                expect.any(Object),
+            );
+            expect(mockFetch).toHaveBeenNthCalledWith(
+                2,
+                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels&nextPageToken=token-page-2",
+                expect.any(Object),
             );
         });
     });
@@ -234,11 +271,10 @@ describe("JiraService", () => {
             global.fetch = originalFetch;
         });
 
-        it("should build JQL query using parent and Epic Link to fetch children", async () => {
+        it("should build JQL query using parent to fetch children", async () => {
             mockConfigService.getJiraCredentials.mockResolvedValue({ token: "bearer-token-val" });
 
             const mockSearchResponse = {
-                total: 1,
                 issues: [{ key: "ENG-102" }],
             };
 
@@ -252,7 +288,7 @@ describe("JiraService", () => {
 
             expect(result.issues?.[0].key).toBe("ENG-102");
             expect(mockFetch).toHaveBeenCalledWith(
-                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=parent%20%3D%20ENG-101%20OR%20%22Epic%20Link%22%20%3D%20ENG-101&maxResults=100&startAt=0&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
+                "https://saturam.atlassian.net/rest/api/3/search/jql?jql=parent%20%3D%20ENG-101&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels",
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
@@ -260,6 +296,12 @@ describe("JiraService", () => {
                     },
                 }),
             );
+        });
+
+        it("should throw error for invalid parentKey format", async () => {
+            await expect(
+                service.listChildIssues("https://saturam.atlassian.net", "invalid_key; DELETE"),
+            ).rejects.toThrow("Invalid Jira issue key format");
         });
     });
 });

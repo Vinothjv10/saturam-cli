@@ -2,7 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { ConfluenceService } from "../../integrations/confluence/services/confluence.service";
 import { HtmlNormalizerService } from "../normalizers/html-normalizer.service";
-import { KnowledgeDocument, KnowledgeSource } from "./knowledge-source.model";
+import { KnowledgeDocument, KnowledgeSource, KnowledgeSourceType } from "./knowledge-source.model";
 
 const logger = getLogger("ConfluenceKnowledgeSource");
 
@@ -18,12 +18,9 @@ export class ConfluenceKnowledgeSource implements KnowledgeSource {
     constructor(
         private readonly confluence: ConfluenceService,
         private readonly html: HtmlNormalizerService,
-    ) { }
+    ) {}
 
-    public async fetch(
-        id: string,
-        options?: { baseUrl?: string },
-    ): Promise<KnowledgeDocument> {
+    public async fetch(id: string, options?: { baseUrl?: string }): Promise<KnowledgeDocument> {
         const baseUrl = options?.baseUrl ?? "";
 
         if (!id) {
@@ -59,7 +56,9 @@ export class ConfluenceKnowledgeSource implements KnowledgeSource {
             try {
                 return rawHtml ? this.html.convertHtmlToMarkdown(rawHtml) : "_No Content_";
             } catch (err) {
-                logger.error(`Failed to normalize HTML for Confluence page ${id} ("${title}"): ${(err as Error).message}`);
+                logger.error(
+                    `Failed to normalize HTML for Confluence page ${id} ("${title}"): ${(err as Error).message}`,
+                );
                 return "_Normalization Failed — see logs for details_";
             }
         })();
@@ -87,7 +86,7 @@ ${contentMarkdown}
         // 5. Return KnowledgeDocument
         return {
             id,
-            source: "confluence",
+            source: KnowledgeSourceType.CONFLUENCE,
             title,
             content,
             url: docUrl,

@@ -103,7 +103,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     readonly aliases = ["i", "setup"];
     readonly inputs = INPUTS;
 
-    constructor(private readonly config: ConfigService) { }
+    constructor(private readonly config: ConfigService) {}
 
     public async execute(_inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         logger.info("Welcome to Saturam Engineering CLI setup!\n");
@@ -265,12 +265,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             selectedProviders.length === 1
                 ? selectedProviders[0]
                 : await select({
-                    message: "Which provider should be the default?",
-                    choices: selectedProviders.map((p) => ({
-                        name: PROVIDER_DISPLAY_NAMES[p],
-                        value: p,
-                    })),
-                });
+                      message: "Which provider should be the default?",
+                      choices: selectedProviders.map((p) => ({
+                          name: PROVIDER_DISPLAY_NAMES[p],
+                          value: p,
+                      })),
+                  });
 
         const defaultModel = await this.promptForModel(defaultProvider, providers[defaultProvider]);
 
@@ -342,7 +342,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
     private async configureOpenAIProvider(existing?: ProviderConfig): Promise<ProviderConfig> {
         const apiKey = await this.promptForApiKey(AIProvider.OPENAI, existing?.apiKey);
-        
+
         // Always ask for base URL, showing current/default value
         const currentUrl = existing?.baseUrl ?? process.env.OPENAI_BASE_URL;
         const baseUrl = await input({
@@ -419,8 +419,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const model = await input({
             message: "Model name:",
-            default:
-                existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
+            default: existing?.model ?? process.env.SELF_HOSTED_MODEL ?? "qwen2.5-coder:latest",
             validate: (val) => (val.trim() ? true : "Model name is required"),
         });
 
@@ -514,12 +513,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             configuredProviders.length === 1
                 ? configuredProviders[0]
                 : await select({
-                    message: "Select the provider:",
-                    choices: configuredProviders.map((p) => ({
-                        name: PROVIDER_DISPLAY_NAMES[p],
-                        value: p,
-                    })),
-                });
+                      message: "Select the provider:",
+                      choices: configuredProviders.map((p) => ({
+                          name: PROVIDER_DISPLAY_NAMES[p],
+                          value: p,
+                      })),
+                  });
 
         const model = await this.promptForModel(provider, existing.providers?.[provider]);
         const config: PersonalConfiguration = {
@@ -617,9 +616,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         // If we have an existing key, ask if user wants to keep it
         if (existingKey) {
-            const masked = existingKey.length > 16
-                ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}`
-                : "(configured)";
+            const masked =
+                existingKey.length > 16 ? `${existingKey.slice(0, 8)}...${existingKey.slice(-4)}` : "(configured)";
             const useExisting = await confirm({
                 message: `Use existing API key ${masked}?`,
                 default: true,
@@ -642,7 +640,12 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
     ): Promise<
         Pick<
             PersonalConfiguration,
-            "githubToken" | "bitbucketToken" | "bitbucketEmail" | "bitbucketUsername" | "gitlabToken" | "gitlabInstanceUrl"
+            | "githubToken"
+            | "bitbucketToken"
+            | "bitbucketEmail"
+            | "bitbucketUsername"
+            | "gitlabToken"
+            | "gitlabInstanceUrl"
         >
     > {
         logger.info("\n--- Source Control Platforms ---");
@@ -651,15 +654,17 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         const platforms = await checkbox({
             message: "Which source control platforms do you use?",
             choices: [
-                { name: "GitHub", value: "github" as const, checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken },
+                {
+                    name: "GitHub",
+                    value: "github" as const,
+                    checked: isFirstRun ? this.checkGhCli() : !!existing.githubToken,
+                },
                 { name: "Bitbucket", value: "bitbucket" as const, checked: !!existing.bitbucketToken },
                 { name: "GitLab", value: "gitlab" as const, checked: !!existing.gitlabToken },
             ],
         });
 
-        const githubToken = platforms.includes("github")
-            ? await this.resolveGitHubToken(existing)
-            : undefined;
+        const githubToken = platforms.includes("github") ? await this.resolveGitHubToken(existing) : undefined;
 
         const { bitbucketToken, bitbucketEmail, bitbucketUsername } = platforms.includes("bitbucket")
             ? await this.resolveBitbucketAuth(existing)
@@ -705,9 +710,11 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         return token || existing.githubToken;
     }
 
-    private async resolveBitbucketAuth(
-        existing: PersonalConfiguration,
-    ): Promise<{ bitbucketToken: string | undefined; bitbucketEmail: string | undefined; bitbucketUsername: string | undefined }> {
+    private async resolveBitbucketAuth(existing: PersonalConfiguration): Promise<{
+        bitbucketToken: string | undefined;
+        bitbucketEmail: string | undefined;
+        bitbucketUsername: string | undefined;
+    }> {
         logger.info("\nBitbucket API tokens replaced App Passwords as of September 2025.");
         logger.info("Create one at: Atlassian account → Security → Create and manage API tokens");
         logger.info("  → Select 'Bitbucket' as the app");
@@ -827,9 +834,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // SCM platforms
         const scmPlatforms: string[] = [];
         if (config.githubToken) {
-            const masked = config.githubToken.length > 16
-                ? `${config.githubToken.slice(0, 8)}...`
-                : "(configured)";
+            const masked = config.githubToken.length > 16 ? `${config.githubToken.slice(0, 8)}...` : "(configured)";
             scmPlatforms.push(`GitHub (token: ${masked})`);
         } else if (this.checkGhCli()) {
             scmPlatforms.push("GitHub (via gh CLI)");
@@ -838,15 +843,13 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             const authType = config.bitbucketEmail
                 ? `API token, email: ${config.bitbucketEmail}`
                 : config.bitbucketUsername
-                    ? `legacy app password, user: ${config.bitbucketUsername}`
-                    : "API token (no email set — run 'sat-cli init' to add email)";
+                  ? `legacy app password, user: ${config.bitbucketUsername}`
+                  : "API token (no email set — run 'sat-cli init' to add email)";
             scmPlatforms.push(`Bitbucket (${authType})`);
         }
         if (config.gitlabToken) {
             const instance = config.gitlabInstanceUrl ?? "gitlab.com";
-            const masked = config.gitlabToken.length > 16
-                ? `${config.gitlabToken.slice(0, 8)}...`
-                : "(configured)";
+            const masked = config.gitlabToken.length > 16 ? `${config.gitlabToken.slice(0, 8)}...` : "(configured)";
             scmPlatforms.push(`GitLab (token: ${masked}, instance: ${instance})`);
         }
         if (scmPlatforms.length > 0) {

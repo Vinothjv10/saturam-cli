@@ -76,6 +76,53 @@ export class AdfNormalizerService {
                 return node.attrs?.id ? `@User:${String(node.attrs.id)}` : "@User";
             }
 
+            case "table": {
+                const rows = node.content || [];
+                if (rows.length === 0) return "";
+                const renderedRows = rows.map((rowNode) => this.renderAdfNode(rowNode));
+
+                const firstRow = rows[0];
+                const headerCells = firstRow.content || [];
+                const separatorCols = headerCells.map(() => "---");
+                const separatorRow = `| ${separatorCols.join(" | ")} |`;
+
+                if (renderedRows.length > 0) {
+                    const header = renderedRows[0];
+                    const body = renderedRows.slice(1);
+                    return `\n\n${header}\n${separatorRow}\n${body.join("\n")}\n\n`;
+                }
+                return "";
+            }
+
+            case "tableRow": {
+                const cells = node.content || [];
+                const renderedCells = cells.map((cellNode) => this.renderAdfNode(cellNode).trim());
+                return `| ${renderedCells.join(" | ")} |`;
+            }
+
+            case "tableHeader":
+            case "tableCell": {
+                const text = this.renderChildren(node.content).trim();
+                return text.replace(/\r?\n/g, " ");
+            }
+
+            case "inlineCard": {
+                const url = String(node.attrs?.url || "");
+                return url ? `[${url}](${url})` : "";
+            }
+
+            case "mediaSingle":
+                return this.renderChildren(node.content);
+
+            case "media": {
+                const id = String(node.attrs?.id || "");
+                const type = String(node.attrs?.type || "file");
+                if (type === "image") {
+                    return `![Image Attachment: ${id}](attachment:${id})`;
+                }
+                return `[Attachment: ${id}](attachment:${id})`;
+            }
+
             default:
                 logger.warn(`Unhandled ADF node type encountered: ${node.type}`);
                 return node.content ? this.renderChildren(node.content) : "";

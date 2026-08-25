@@ -15,7 +15,7 @@ const logger = getLogger("ConfluenceService");
 
 @Service()
 export class ConfluenceService {
-    constructor(private readonly config: ConfigService) { }
+    constructor(private readonly config: ConfigService) {}
 
     // --- Private helpers ---
 
@@ -25,8 +25,7 @@ export class ConfluenceService {
      */
     private getApiBase(baseUrl: string): string {
         const base = baseUrl.trim().replace(/\/$/, "");
-        const withWiki =
-            base.includes(".atlassian.net") && !base.endsWith("/wiki") ? `${base}/wiki` : base;
+        const withWiki = base.includes(".atlassian.net") && !base.endsWith("/wiki") ? `${base}/wiki` : base;
         return withWiki + CONFLUENCE_API_PATH; // e.g. https://example.atlassian.net/wiki/rest/api
     }
 
@@ -35,9 +34,7 @@ export class ConfluenceService {
         if (credentials.email) {
             return {
                 Accept: "application/json",
-                Authorization: `Basic ${Buffer.from(
-                    `${credentials.email}:${credentials.token}`,
-                ).toString("base64")}`,
+                Authorization: `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString("base64")}`,
             };
         }
         return {
@@ -55,8 +52,7 @@ export class ConfluenceService {
      */
     public async getPage(baseUrl: string, pageId: string): Promise<ConfluencePageApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
-        const expand =
-            "body.storage,version,space,ancestors,history.lastUpdated,history.createdBy,metadata.labels";
+        const expand = "body.storage,version,space,ancestors,history.lastUpdated,history.createdBy,metadata.labels";
         const url = `${apiBase}/content/${pageId}?expand=${encodeURIComponent(expand)}`;
 
         logger.debug(`Fetching Confluence page ${pageId} from: ${url}`);
@@ -135,9 +131,7 @@ export class ConfluenceService {
         const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
-            throw new Error(
-                `Failed to fetch Confluence spaces: ${response.status} ${response.statusText} - ${text}`,
-            );
+            throw new Error(`Failed to fetch Confluence spaces: ${response.status} ${response.statusText} - ${text}`);
         }
         return response.json() as Promise<ConfluenceSpaceListApiResponse>;
     }
@@ -180,7 +174,9 @@ export class ConfluenceService {
             accumulatedPages: ConfluencePageApiResponse[],
         ): Promise<ConfluencePageApiResponse[]> => {
             if (iterations >= MAX_ITERATIONS) {
-                logger.error(`listAllPagesInSpace: exceeded MAX_ITERATIONS (${MAX_ITERATIONS}) for space "${spaceKey}". Partial results returned.`);
+                logger.error(
+                    `listAllPagesInSpace: exceeded MAX_ITERATIONS (${MAX_ITERATIONS}) for space "${spaceKey}". Partial results returned.`,
+                );
                 return accumulatedPages;
             }
 
@@ -228,9 +224,7 @@ export class ConfluenceService {
         const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
         if (!response.ok) {
             const text = await response.text();
-            throw new Error(
-                `Failed to run Confluence CQL search: ${response.status} ${response.statusText} - ${text}`,
-            );
+            throw new Error(`Failed to run Confluence CQL search: ${response.status} ${response.statusText} - ${text}`);
         }
         return response.json() as Promise<ConfluenceSearchApiResponse>;
     }

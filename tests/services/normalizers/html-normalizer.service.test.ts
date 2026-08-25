@@ -86,7 +86,7 @@ describe("HtmlNormalizerService", () => {
         });
 
         it("should strip Confluence structured-macro tags", () => {
-            const html = "<ac:structured-macro ac:name=\"code\">content</ac:structured-macro>";
+            const html = '<ac:structured-macro ac:name="code">content</ac:structured-macro>';
             const md = normalizer.convertHtmlToMarkdown(html);
             expect(md).not.toContain("<ac:structured-macro");
         });

@@ -6,7 +6,8 @@ import { ConfigService } from "../../../src/services/config-service";
 import { JiraKnowledgeSource } from "../../../src/services/knowledge/jira-knowledge.source";
 import { ConfluenceKnowledgeSource } from "../../../src/services/knowledge/confluence-knowledge.source";
 import { GoogleDriveKnowledgeSource } from "../../../src/services/knowledge/google-drive-knowledge.source";
-import { KnowledgeDocument } from "../../../src/services/knowledge/knowledge-source.model";
+import { KnowledgeDocument, KnowledgeSourceType } from "../../../src/services/knowledge/knowledge-source.model";
+import { GoogleSheetsKnowledgeSource } from "../../../src/services/knowledge/google-sheets-knowledge.source";
 import { mkdir, writeFile } from "fs/promises";
 
 jest.mock("fs/promises", () => ({
@@ -17,7 +18,7 @@ jest.mock("fs/promises", () => ({
 // Helpers to build minimal KnowledgeDocuments in tests
 const makeDoc = (overrides: Partial<KnowledgeDocument> = {}): KnowledgeDocument => ({
     id: "test-id",
-    source: "jira",
+    source: KnowledgeSourceType.JIRA,
     title: "Test Doc",
     content: "# Test Doc\n",
     url: "https://example.com/browse/TEST-1",
@@ -34,6 +35,7 @@ describe("OnboardService", () => {
     let mockJiraSource: jest.Mocked<JiraKnowledgeSource>;
     let mockConfluenceSource: jest.Mocked<ConfluenceKnowledgeSource>;
     let mockGoogleDriveSource: jest.Mocked<GoogleDriveKnowledgeSource>;
+    let mockGoogleSheetsSource: jest.Mocked<GoogleSheetsKnowledgeSource>;
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -81,15 +83,26 @@ describe("OnboardService", () => {
         mockJiraSource = { fetch: jest.fn() } as any;
         mockConfluenceSource = { fetch: jest.fn() } as any;
         mockGoogleDriveSource = { fetch: jest.fn() } as any;
+        mockGoogleSheetsSource = {
+            fetch: jest.fn().mockImplementation(async (id: string, options?: any) => ({
+                id,
+                source: KnowledgeSourceType.GOOGLE_SHEETS,
+                title: id === "sheet-id-abc" ? "Spreadsheet Title" : "Nested Sheet",
+                content: "# Title\n",
+                url: `https://docs.google.com/spreadsheets/d/${id}`,
+                metadata: { updatedAt: "2026-07-01" },
+            })),
+        } as any;
 
         service = new OnboardService(
             mockConfluence,
             mockJira,
             mockGoogleDrive,
-            mockConfig,
             mockJiraSource,
             mockConfluenceSource,
             mockGoogleDriveSource,
+            mockGoogleSheetsSource,
+            mockConfig,
         );
     });
 
@@ -108,7 +121,7 @@ describe("OnboardService", () => {
 
             const doc = makeDoc({
                 id: "123",
-                source: "confluence",
+                source: KnowledgeSourceType.CONFLUENCE,
                 title: "Test Confluence Page",
                 content: "# Test Confluence Page\n",
                 url: "https://confluence.example.com/wiki/spaces/TST/pages/123",
@@ -117,7 +130,9 @@ describe("OnboardService", () => {
 
             await service.sync(config, "/mock/cwd");
 
-            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("123", { baseUrl: "https://confluence.example.com" });
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("123", {
+                baseUrl: "https://confluence.example.com",
+            });
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
         });
@@ -133,16 +148,13 @@ describe("OnboardService", () => {
             const pages = Array.from({ length: 5 }, (_, i) => ({ id: `id-${i}` }));
             mockConfluence.listAllPagesInSpace.mockResolvedValue(pages as any);
 
-            const doc = makeDoc({ source: "confluence", title: "Mocked Page" });
+            const doc = makeDoc({ source: KnowledgeSourceType.CONFLUENCE, title: "Mocked Page" });
             mockConfluenceSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config, "/mock/cwd");
 
             // Should delegate pagination to the service helper, not call listPagesInSpace directly
-            expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith(
-                "https://confluence.example.com",
-                "TST",
-            );
+            expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith("https://confluence.example.com", "TST");
             expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(5);
         });
 
@@ -159,15 +171,12 @@ describe("OnboardService", () => {
             };
 
             mockConfluence.listAllPagesInSpace.mockResolvedValue([{ id: "page-1" }] as any);
-            const doc = makeDoc({ source: "confluence", title: "Project Page" });
+            const doc = makeDoc({ source: KnowledgeSourceType.CONFLUENCE, title: "Project Page" });
             mockConfluenceSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config, "/mock/cwd");
 
-            expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith(
-                "https://confluence.example.com",
-                "PROJ",
-            );
+            expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith("https://confluence.example.com", "PROJ");
             expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(1);
         });
     });
@@ -183,7 +192,7 @@ describe("OnboardService", () => {
 
             const doc = makeDoc({
                 id: "TST-101",
-                source: "jira",
+                source: KnowledgeSourceType.JIRA,
                 title: "Jira Ticket Summary",
                 url: "https://jira.example.com/browse/TST-101",
             });
@@ -211,16 +220,13 @@ describe("OnboardService", () => {
             const keys = ["TST-0", "TST-1", "TST-2"];
             mockJira.listAllIssuesByJql.mockResolvedValue(keys);
 
-            const doc = makeDoc({ source: "jira", title: "Jira Ticket" });
+            const doc = makeDoc({ source: KnowledgeSourceType.JIRA, title: "Jira Ticket" });
             mockJiraSource.fetch.mockResolvedValue(doc);
 
             await service.sync(config as any, "/mock/cwd");
 
             // Should delegate pagination to the service helper, not call searchIssues directly
-            expect(mockJira.listAllIssuesByJql).toHaveBeenCalledWith(
-                "https://jira.example.com",
-                "project = TST",
-            );
+            expect(mockJira.listAllIssuesByJql).toHaveBeenCalledWith("https://jira.example.com", "project = TST");
             expect(mockJiraSource.fetch).toHaveBeenCalledTimes(3);
         });
     });
@@ -235,7 +241,7 @@ describe("OnboardService", () => {
 
             const doc = makeDoc({
                 id: "doc-id-xyz",
-                source: "googleDocs",
+                source: KnowledgeSourceType.GOOGLE_DOCS,
                 title: "Google Doc Title",
                 content: "# Document Content\n",
                 url: "https://docs.google.com/document/d/doc-id-xyz/edit",
@@ -265,9 +271,7 @@ describe("OnboardService", () => {
             } as any;
             mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue(mockMeta);
             mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
-                valueRanges: [
-                    { range: "Sheet1!A:E", values: [["header1"], ["row1"]] },
-                ],
+                valueRanges: [{ range: "Sheet1!A:E", values: [["header1"], ["row1"]] }],
             });
 
             await service.sync(config, "/mock/cwd");
@@ -316,9 +320,18 @@ describe("OnboardService", () => {
                                 range: "LinksSheet!A:B",
                                 values: [
                                     ["Jira issue", "https://saturam.atlassian.net/browse/DB-826"],
-                                    ["Confluence page", "https://saturam.atlassian.net/wiki/spaces/Alkem/pages/231145593"],
-                                    ["Google Doc", "https://docs.google.com/document/d/1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN"],
-                                    ["Google Sheet", "https://docs.google.com/spreadsheets/d/another-nested-sheet-id/edit"],
+                                    [
+                                        "Confluence page",
+                                        "https://saturam.atlassian.net/wiki/spaces/Alkem/pages/231145593",
+                                    ],
+                                    [
+                                        "Google Doc",
+                                        "https://docs.google.com/document/d/1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN",
+                                    ],
+                                    [
+                                        "Google Sheet",
+                                        "https://docs.google.com/spreadsheets/d/another-nested-sheet-id/edit",
+                                    ],
                                     ["Some non-link text", "some random data"],
                                 ],
                             },
@@ -330,10 +343,7 @@ describe("OnboardService", () => {
                         valueRanges: [
                             {
                                 range: "Sheet1",
-                                values: [
-                                    ["header1"],
-                                    ["val1"],
-                                ],
+                                values: [["header1"], ["val1"]],
                             },
                         ],
                     } as any;
@@ -342,25 +352,35 @@ describe("OnboardService", () => {
             });
 
             mockJiraSource.fetch.mockResolvedValue(
-                makeDoc({ id: "DB-826", source: "jira", title: "DB-826 Ticket" })
+                makeDoc({ id: "DB-826", source: KnowledgeSourceType.JIRA, title: "DB-826 Ticket" }),
             );
             mockConfluenceSource.fetch.mockResolvedValue(
-                makeDoc({ id: "231145593", source: "confluence", title: "Confluence Page" })
+                makeDoc({ id: "231145593", source: KnowledgeSourceType.CONFLUENCE, title: "Confluence Page" }),
             );
             mockGoogleDriveSource.fetch.mockResolvedValue(
-                makeDoc({ id: "1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN", source: "google-drive", title: "Google Doc Spec" })
+                makeDoc({
+                    id: "1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN",
+                    source: KnowledgeSourceType.GOOGLE_DOCS,
+                    title: "Google Doc Spec",
+                }),
             );
 
             await service.sync(config, "/mock/cwd");
 
             expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("sheet-links-id");
-            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("sheet-links-id", ["LinksSheet!A:B"]);
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("sheet-links-id", [
+                "LinksSheet!A:B",
+            ]);
 
             expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("another-nested-sheet-id");
-            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("another-nested-sheet-id", ["Sheet1"]);
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("another-nested-sheet-id", [
+                "Sheet1",
+            ]);
 
             expect(mockJiraSource.fetch).toHaveBeenCalledWith("DB-826", { baseUrl: "https://saturam.atlassian.net" });
-            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", { baseUrl: "https://saturam.atlassian.net" });
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", {
+                baseUrl: "https://saturam.atlassian.net",
+            });
             expect(mockGoogleDriveSource.fetch).toHaveBeenCalledWith("1FZv2bZ1KIVTGRWtK63w3oC25sr1UiPSN");
 
             expect(mkdir).toHaveBeenCalled();
@@ -379,10 +399,7 @@ describe("OnboardService", () => {
             const mockMeta = {
                 spreadsheetId: "multi-tab-sheet-id",
                 title: "Multi-tab Onboarding",
-                sheets: [
-                    { title: "ProjectAlpha" },
-                    { title: "ProjectBeta" },
-                ],
+                sheets: [{ title: "ProjectAlpha" }, { title: "ProjectBeta" }],
             } as any;
 
             mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue(mockMeta);
@@ -390,9 +407,7 @@ describe("OnboardService", () => {
                 valueRanges: [
                     {
                         range: "ProjectAlpha!A1:Z100",
-                        values: [
-                            ["Jira issue A", "https://saturam.atlassian.net/browse/DB-826"],
-                        ],
+                        values: [["Jira issue A", "https://saturam.atlassian.net/browse/DB-826"]],
                     },
                     {
                         range: "ProjectBeta!A1:Z100",
@@ -404,10 +419,10 @@ describe("OnboardService", () => {
             });
 
             mockJiraSource.fetch.mockResolvedValue(
-                makeDoc({ id: "DB-826", source: "jira", title: "DB-826 Ticket" })
+                makeDoc({ id: "DB-826", source: KnowledgeSourceType.JIRA, title: "DB-826 Ticket" }),
             );
             mockConfluenceSource.fetch.mockResolvedValue(
-                makeDoc({ id: "231145593", source: "confluence", title: "Confluence Page" })
+                makeDoc({ id: "231145593", source: KnowledgeSourceType.CONFLUENCE, title: "Confluence Page" }),
             );
 
             await service.sync(config, "/mock/cwd");
@@ -420,7 +435,9 @@ describe("OnboardService", () => {
 
             // Verify that resolved tasks were parsed with correct projectNames (i.e. tab titles)
             expect(mockJiraSource.fetch).toHaveBeenCalledWith("DB-826", { baseUrl: "https://saturam.atlassian.net" });
-            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", { baseUrl: "https://saturam.atlassian.net" });
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", {
+                baseUrl: "https://saturam.atlassian.net",
+            });
 
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();

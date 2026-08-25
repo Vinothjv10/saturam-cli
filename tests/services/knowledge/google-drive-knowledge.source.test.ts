@@ -33,7 +33,7 @@ describe("GoogleDriveKnowledgeSource", () => {
         const doc = await source.fetch("doc-id-abc");
 
         expect(doc.id).toBe("doc-id-abc");
-        expect(doc.source).toBe("googleDocs");
+        expect(doc.source).toBe("google-docs");
         expect(doc.title).toBe("My Spec");
         expect(doc.content).toBe("# My Spec\nSome content.");
         expect(doc.url).toBe("https://docs.google.com/document/d/doc-id-abc/edit");
@@ -52,7 +52,7 @@ describe("GoogleDriveKnowledgeSource", () => {
         const ab = new ArrayBuffer(8);
         const view = new Uint8Array(ab);
         view[0] = 0x50;
-        view[1] = 0x4B;
+        view[1] = 0x4b;
         mockGoogleDrive.getFileBinary.mockResolvedValue(ab);
 
         const doc = await source.fetch("docx-id-xyz");
