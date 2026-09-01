@@ -229,6 +229,23 @@ sat-cli onboard --knowledge-base
 
 Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
 
+#### Chatting with the Knowledge Base (RAG)
+
+`--knowledge-base` shows you the raw retrieved chunks. `--chat` goes one step further and answers in plain language, using the LLM already configured via `sat-cli init` → "AI / LLM providers":
+
+```bash
+sat-cli onboard --chat
+```
+
+For each question, this:
+
+1. Checks that at least one AI/LLM provider is configured (`sat-cli init` → "AI / LLM providers"). If none is found, it prints a suggestion to configure one and stops — no failed API calls.
+2. Retrieves relevant chunks from the Bedrock Knowledge Base, exactly like `--knowledge-base`.
+3. Sends the retrieved chunks (as numbered, cited context) plus your question to the configured LLM.
+4. Prints the LLM's generated answer, followed by a "Sources" list mapping each citation number back to its source location.
+
+Same exit controls as `--knowledge-base`: blank input, `exit`, `quit`, `:q`, or Ctrl+C.
+
 ---
 
 ## 5. Troubleshooting & Expiration Notes

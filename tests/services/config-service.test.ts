@@ -138,6 +138,25 @@ describe("ConfigService Onboarding Credentials", () => {
         });
     });
 
+    describe("hasAnyLLMProviderConfigured", () => {
+        it("should return false when no providers are configured", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({ providers: {} } as any);
+            await expect(service.hasAnyLLMProviderConfigured()).resolves.toBe(false);
+        });
+
+        it("should return false when providers is undefined", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({} as any);
+            await expect(service.hasAnyLLMProviderConfigured()).resolves.toBe(false);
+        });
+
+        it("should return true when at least one provider is configured", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                providers: { [AIProvider.ANTHROPIC]: { enabled: true, apiKey: "sk-test" } },
+            } as any);
+            await expect(service.hasAnyLLMProviderConfigured()).resolves.toBe(true);
+        });
+    });
+
     describe("getS3Config", () => {
         it("should throw if AWS cloud is not configured", async () => {
             jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({} as any);

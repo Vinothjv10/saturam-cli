@@ -465,6 +465,12 @@ export class ConfigService {
         return config.providers?.[provider];
     }
 
+    /** Whether at least one AI/LLM provider has been configured via 'sat-cli init'. */
+    public async hasAnyLLMProviderConfigured(): Promise<boolean> {
+        const config = await this.loadPersonalConfig();
+        return Object.keys(config.providers ?? {}).length > 0;
+    }
+
     // --- GitHub Token ---
 
     public async getGitHubToken(): Promise<string> {

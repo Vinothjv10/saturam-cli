@@ -3,6 +3,7 @@ import { OnboardCommand } from "../../src/commands/onboard-command";
 import { OnboardService } from "../../src/services/onboarding/onboard.service";
 import { ConfigService } from "../../src/services/config-service";
 import { BedrockKnowledgeBaseService } from "../../src/integrations/aws/services/bedrock-knowledge-base.service";
+import { LlmService } from "../../src/services/llm-service";
 
 jest.mock("@inquirer/prompts", () => ({
     input: jest.fn(),
@@ -13,6 +14,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     let mockOnboardService: jest.Mocked<OnboardService>;
     let mockConfigService: jest.Mocked<ConfigService>;
     let mockKnowledgeBase: jest.Mocked<BedrockKnowledgeBaseService>;
+    let mockLlmService: jest.Mocked<LlmService>;
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -26,13 +28,18 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             loadOnboardingConfig: jest.fn().mockResolvedValue({
                 confluence: { baseUrl: "https://saturam.atlassian.net" },
             }),
+            hasAnyLLMProviderConfigured: jest.fn().mockResolvedValue(true),
         } as any;
 
         mockKnowledgeBase = {
             retrieve: jest.fn().mockResolvedValue([]),
         } as any;
 
-        command = new OnboardCommand(mockOnboardService, mockConfigService, mockKnowledgeBase);
+        mockLlmService = {
+            prompt: jest.fn().mockResolvedValue("Here is the answer."),
+        } as any;
+
+        command = new OnboardCommand(mockOnboardService, mockConfigService, mockKnowledgeBase, mockLlmService);
     });
 
     it("should route to Google Sheet mode when passed a Google Sheets URL", async () => {
@@ -42,6 +49,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -60,6 +68,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -78,6 +87,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(
@@ -99,6 +109,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -117,6 +128,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -143,6 +155,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": true,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.uploadToS3).toHaveBeenCalledWith(filesWritten);
@@ -155,6 +168,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: undefined,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.uploadToS3).not.toHaveBeenCalled();
@@ -167,6 +181,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "upload-to-s3": undefined,
             list: true,
             "knowledge-base": undefined,
+            chat: undefined,
         });
 
         expect(mockOnboardService.listSyncedDocuments).toHaveBeenCalledTimes(1);
@@ -184,6 +199,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 "upload-to-s3": undefined,
                 list: undefined,
                 "knowledge-base": true,
+                chat: undefined,
             });
 
             expect(mockOnboardService.sync).not.toHaveBeenCalled();
@@ -200,6 +216,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 "upload-to-s3": undefined,
                 list: undefined,
                 "knowledge-base": true,
+                chat: undefined,
             });
 
             expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
@@ -214,6 +231,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 "upload-to-s3": undefined,
                 list: undefined,
                 "knowledge-base": true,
+                chat: undefined,
             });
 
             expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
@@ -231,6 +249,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                     "upload-to-s3": undefined,
                     list: undefined,
                     "knowledge-base": true,
+                    chat: undefined,
                 }),
             ).resolves.toBeUndefined();
 
@@ -252,6 +271,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 "upload-to-s3": undefined,
                 list: undefined,
                 "knowledge-base": true,
+                chat: undefined,
             });
 
             expect(mockKnowledgeBase.retrieve).toHaveBeenCalledTimes(2);
@@ -270,10 +290,68 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                     "upload-to-s3": undefined,
                     list: undefined,
                     "knowledge-base": true,
+                    chat: undefined,
                 }),
             ).resolves.toBeUndefined();
 
             expect(input).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe("--chat RAG search", () => {
+        const chatInputs = {
+            configOrSheet: undefined,
+            "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: undefined,
+            "knowledge-base": undefined,
+            chat: true,
+        };
+
+        it("shows a setup suggestion and skips everything else when no LLM provider is configured", async () => {
+            (mockConfigService.hasAnyLLMProviderConfigured as jest.Mock).mockResolvedValue(false);
+
+            await command.execute(chatInputs);
+
+            expect(input).not.toHaveBeenCalled();
+            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+            expect(mockLlmService.prompt).not.toHaveBeenCalled();
+            expect(mockOnboardService.sync).not.toHaveBeenCalled();
+        });
+
+        it("retrieves context, sends it plus the question to the LLM, and prints the answer", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("what is the auth flow?").mockResolvedValueOnce("");
+            (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
+                { content: "auth uses OAuth2", score: 0.95, location: "s3://bucket/auth.md" },
+            ]);
+            (mockLlmService.prompt as jest.Mock).mockResolvedValueOnce("The auth flow uses OAuth2. [1]");
+
+            await command.execute(chatInputs);
+
+            expect(mockKnowledgeBase.retrieve).toHaveBeenCalledWith("what is the auth flow?");
+            expect(mockLlmService.prompt).toHaveBeenCalledTimes(1);
+            const [messages] = (mockLlmService.prompt as jest.Mock).mock.calls[0];
+            expect(messages).toHaveLength(2);
+            expect(String(messages[1].content)).toContain("auth uses OAuth2");
+            expect(String(messages[1].content)).toContain("what is the auth flow?");
+        });
+
+        it("logs an error and keeps looping when the LLM call throws", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("bad query").mockResolvedValueOnce("");
+            (mockLlmService.prompt as jest.Mock).mockRejectedValueOnce(new Error("No API key found"));
+
+            await expect(command.execute(chatInputs)).resolves.toBeUndefined();
+
+            expect(input).toHaveBeenCalledTimes(2);
+        });
+
+        it("exits immediately on blank input without calling retrieve or the LLM", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("");
+
+            await command.execute(chatInputs);
+
+            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+            expect(mockLlmService.prompt).not.toHaveBeenCalled();
         });
     });
 });
