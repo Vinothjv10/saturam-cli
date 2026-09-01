@@ -110,6 +110,57 @@ describe("OnboardService", () => {
         expect(service).toBeDefined();
     });
 
+    describe("projectNameOverride", () => {
+        it("forces every task's output folder to the override, ignoring config-derived project names", async () => {
+            const config = {
+                projects: {
+                    MyProject: {
+                        confluence: { baseUrl: "https://confluence.example.com", pages: ["123"] },
+                    },
+                },
+            };
+
+            const doc = makeDoc({
+                id: "123",
+                source: KnowledgeSourceType.CONFLUENCE,
+                title: "Test Confluence Page",
+            });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
+
+            await service.sync(config, "/mock/cwd", "Custom Project");
+
+            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) =>
+                String(call[0]).endsWith(".md"),
+            );
+            expect(writeCall[0]).toContain("/custom-project/");
+            expect(writeCall[0]).not.toContain("/myproject/");
+        });
+
+        it("uses the auto-derived project name when no override is passed", async () => {
+            const config = {
+                projects: {
+                    MyProject: {
+                        confluence: { baseUrl: "https://confluence.example.com", pages: ["123"] },
+                    },
+                },
+            };
+
+            const doc = makeDoc({
+                id: "123",
+                source: KnowledgeSourceType.CONFLUENCE,
+                title: "Test Confluence Page",
+            });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
+
+            await service.sync(config, "/mock/cwd");
+
+            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) =>
+                String(call[0]).endsWith(".md"),
+            );
+            expect(writeCall[0]).toContain("/myproject/");
+        });
+    });
+
     describe("sync Confluence pages", () => {
         it("should call confluenceSource.fetch and persist docs", async () => {
             const config = {

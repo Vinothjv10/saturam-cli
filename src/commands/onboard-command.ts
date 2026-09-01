@@ -16,6 +16,12 @@ const INPUTS = [
         schema: z.string().optional(),
         argument: true,
     },
+    {
+        name: "project-name",
+        description:
+            "Override the project name used for output folders (e.g. onboarding/confluence/<project-name>/...) for every document fetched in this run",
+        schema: z.string().optional(),
+    },
 ] as const;
 
 @Service()
@@ -35,6 +41,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
         const cwd = process.env.SATENG_ORIGINAL_CWD ?? process.cwd();
         const arg = inputs.configOrSheet;
+        const projectNameOverride = inputs["project-name"];
 
         const isGoogleSheet = arg && (arg.includes("docs.google.com/spreadsheets") || /^[a-zA-Z0-9-_]{44}$/.test(arg));
 
@@ -47,7 +54,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             const parsedConfig = {
                 onboardingSheets: [{ spreadsheetId }],
             };
-            await this.onboardService.sync(parsedConfig, cwd);
+            await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
             return;
         }
 
@@ -55,6 +62,6 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
         logger.info(`Loading onboarding configuration from: ${configPath}`);
         const parsedConfig = await this.configService.loadOnboardingConfig(configPath);
-        await this.onboardService.sync(parsedConfig, cwd);
+        await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
     }
 }

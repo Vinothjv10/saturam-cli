@@ -176,6 +176,17 @@ Fetch and synchronize documents directly from a Google Sheet URL or spreadsheet 
 npx ts-node src/entrypoints/main.ts onboard <spreadsheet_url_or_id>
 ```
 
+#### Overriding the Output Project Name
+
+By default, output folders are named after each config entry's project key (or, for `onboardingSheets`, the sheet tab title). Pass `--project-name` to force every document fetched in a run into a single project folder, regardless of how each source is configured:
+
+```bash
+sat-cli onboard --project-name "Saturam Core"
+sat-cli onboard <spreadsheet_url_or_id> --project-name "Saturam Core"
+```
+
+This affects every task type in the run (Confluence, Jira, Google Docs, Google Sheets, and sheet-resolved links) — e.g. `onboarding/confluence/saturam-core/...` instead of each task's own derived name.
+
 ---
 
 ## 5. Troubleshooting & Expiration Notes

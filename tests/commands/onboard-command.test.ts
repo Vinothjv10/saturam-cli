@@ -25,6 +25,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     it("should route to Google Sheet mode when passed a Google Sheets URL", async () => {
         await command.execute({
             configOrSheet: "https://docs.google.com/spreadsheets/d/1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg/edit",
+            "project-name": undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -32,12 +33,14 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }],
             },
             expect.any(String),
+            undefined,
         );
     });
 
     it("should route to Google Sheet mode when passed a 44-character Google Sheet ID", async () => {
         await command.execute({
             configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+            "project-name": undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -45,11 +48,12 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }],
             },
             expect.any(String),
+            undefined,
         );
     });
 
     it("should default to local config mode when no argument is passed", async () => {
-        await command.execute({ configOrSheet: undefined });
+        await command.execute({ configOrSheet: undefined, "project-name": undefined });
 
         expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(
             expect.stringContaining(".sateng/onboarding.json"),
@@ -59,6 +63,34 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 confluence: { baseUrl: "https://saturam.atlassian.net" },
             },
             expect.any(String),
+            undefined,
+        );
+    });
+
+    it("should pass the --project-name override through to OnboardService.sync in config mode", async () => {
+        await command.execute({ configOrSheet: undefined, "project-name": "custom-project" });
+
+        expect(mockOnboardService.sync).toHaveBeenCalledWith(
+            {
+                confluence: { baseUrl: "https://saturam.atlassian.net" },
+            },
+            expect.any(String),
+            "custom-project",
+        );
+    });
+
+    it("should pass the --project-name override through to OnboardService.sync in Google Sheet mode", async () => {
+        await command.execute({
+            configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+            "project-name": "custom-project",
+        });
+
+        expect(mockOnboardService.sync).toHaveBeenCalledWith(
+            {
+                onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }],
+            },
+            expect.any(String),
+            "custom-project",
         );
     });
 });

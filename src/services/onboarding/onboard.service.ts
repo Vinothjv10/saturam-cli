@@ -90,7 +90,12 @@ export class OnboardService {
         private readonly config: ConfigService,
     ) {}
 
-    public async sync(config: OnboardConfig, cwd: string): Promise<void> {
+    /** When set, overrides every task's project name for the duration of a sync() call. */
+    private projectNameOverride?: string;
+
+    public async sync(config: OnboardConfig, cwd: string, projectNameOverride?: string): Promise<void> {
+        this.projectNameOverride = projectNameOverride;
+
         // Resolve onboarding sheets links
         const globalSheetConfigs = config.onboardingSheets || [];
         const projectSheetConfigs = Object.entries(config.projects || {}).flatMap(
@@ -428,8 +433,9 @@ export class OnboardService {
         projectName?: string,
     ): Promise<void> {
         const { spreadsheetId, range } = sheetConfig;
-        if (projectName) {
-            logger.info(`Reading Google Sheet ${spreadsheetId} for project "${projectName}"...`);
+        const effectiveProjectName = this.projectNameOverride ?? projectName;
+        if (effectiveProjectName) {
+            logger.info(`Reading Google Sheet ${spreadsheetId} for project "${effectiveProjectName}"...`);
         } else {
             logger.info(`Reading project index sheet ${spreadsheetId}...`);
         }
@@ -530,9 +536,10 @@ export class OnboardService {
     }
 
     private sanitizeProjectName(projectName?: string): string | undefined {
-        if (!projectName) return undefined;
+        const effective = this.projectNameOverride ?? projectName;
+        if (!effective) return undefined;
         return (
-            projectName
+            effective
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, "-")
                 .replace(/(^-|-$)/g, "") || "default"
