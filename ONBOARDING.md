@@ -195,13 +195,21 @@ Pass `--upload-to-s3` to upload every file written during the run to the configu
 sat-cli onboard --project-name "Saturam Core" --upload-to-s3
 ```
 
-For each file, this:
+For each content file, this:
 
 1. Ensures the destination "folder" prefix exists in the bucket (creates it if not — S3 has no real folders, so this is a marker object under that prefix).
-2. Checks whether the object already exists at that key in S3.
-3. Uploads it only if it doesn't already exist — existing objects are left untouched and reported as skipped.
+2. Checks whether the content object already exists at that key in S3.
+3. If not, uploads the content **plus a Bedrock Knowledge Base-compliant metadata sidecar** at `<key>.metadata.json` — e.g. alongside `saturam-core/google-docs/golden-record.md`, it writes `saturam-core/google-docs/golden-record.md.metadata.json` containing:
 
-Local files always mirror their path under `~/.config/sateng/onboarding/` as the S3 key (e.g. `saturam-core/google-docs/golden-record.md`), optionally under the bucket's configured prefix.
+    ```json
+    { "metadataAttributes": { "title": "...", "source": "google-docs", "url": "...", "category": "google-docs", "project": "saturam-core", "updatedAt": "...", "author": "..." } }
+    ```
+
+   Already-present content is left untouched and reported as skipped.
+
+This naming — `<content-key>.metadata.json` in the same prefix as the content object — is the exact convention Amazon Bedrock Knowledge Bases uses to attach filterable metadata to a source document during ingestion. It is **not** the same as the local `<file>.json` bookkeeping sidecar written by `sat-cli onboard` (which stores full document metadata for `--list` and isn't uploaded to S3 under its own name) — uploading that bare `.json` next to the content would make Bedrock ingest it as its own separate document instead of recognizing it as metadata.
+
+Local content files always mirror their path under `~/.config/sateng/onboarding/` as the S3 key (e.g. `saturam-core/google-docs/golden-record.md`), optionally under the bucket's configured prefix. Once synced, point a Bedrock Knowledge Base's S3 data source at that bucket/prefix and run an ingestion job (`StartIngestionJob`, or via the console) to chunk, embed, and index the content — the `metadataAttributes` become filterable at query time (e.g. retrieve only chunks where `project = saturam-core`).
 
 #### Listing Synced Documents
 

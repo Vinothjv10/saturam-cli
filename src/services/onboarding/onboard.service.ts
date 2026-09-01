@@ -75,6 +75,16 @@ interface MappedTask {
     outputPath?: string;
 }
 
+/**
+ * A locally-synced content file plus the metadata attributes that should accompany it
+ * when uploaded to S3, in the shape Amazon Bedrock Knowledge Bases expects for filtering
+ * (see uploadToS3 — written out as "<contentPath key>.metadata.json": { metadataAttributes }).
+ */
+export interface SyncedDocument {
+    contentPath: string;
+    metadataAttributes: Record<string, string | number | boolean>;
+}
+
 @Service()
 export class OnboardService {
     constructor(
@@ -94,14 +104,14 @@ export class OnboardService {
 
     /** When set, overrides every task's project name for the duration of a sync() call. */
     private projectNameOverride?: string;
-    /** Absolute paths of every file written during the current sync() call. */
-    private syncedFiles: string[] = [];
+    /** Content files written during the current sync() call, with their S3/Bedrock metadata attributes. */
+    private syncedFiles: SyncedDocument[] = [];
 
     public async sync(
         config: OnboardConfig,
         cwd: string,
         projectNameOverride?: string,
-    ): Promise<{ filesWritten: string[] }> {
+    ): Promise<{ filesWritten: SyncedDocument[] }> {
         this.projectNameOverride = projectNameOverride;
         this.syncedFiles = [];
 
@@ -428,6 +438,19 @@ export class OnboardService {
                     usedPaths.add(absoluteOutputPath);
 
                     await this.writeDoc(doc, absoluteOutputPath);
+                    this.syncedFiles.push({
+                        contentPath: absoluteOutputPath,
+                        metadataAttributes: this.buildMetadataAttributes({
+                            title: doc.title,
+                            source: doc.source,
+                            url: doc.url,
+                            category: subdir,
+                            project: sanitizedProj,
+                            updatedAt: doc.metadata?.updatedAt,
+                            author: doc.metadata?.author,
+                            labels: doc.metadata?.labels,
+                        }),
+                    });
                     logger.info(`✓ Saved ${label} "${doc.title}" to: ${absoluteOutputPath} (and JSON metadata)`);
                 }),
             ),
@@ -490,7 +513,18 @@ export class OnboardService {
 
             await mkdir(outputDir, { recursive: true });
             await writeFile(jsonPath, JSON.stringify(sidecar, null, 4), "utf8");
-            this.syncedFiles.push(jsonPath);
+            this.syncedFiles.push({
+                contentPath: jsonPath,
+                metadataAttributes: this.buildMetadataAttributes({
+                    title: spreadsheetTitle,
+                    source: "google-sheets",
+                    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+                    category: "google-sheets",
+                    project: sanitizedProj,
+                    updatedAt: sidecar.fetchedAt,
+                    rowCount: sidecar.rowCount,
+                }),
+            });
 
             logger.info(
                 `✓ Saved Google Sheet "${spreadsheetTitle}" index (${allRows.length - 1} data row(s)) to: ${jsonPath}`,
@@ -516,7 +550,27 @@ export class OnboardService {
         await mkdir(dirname(absoluteOutputPath), { recursive: true });
         await writeFile(absoluteOutputPath, doc.content, "utf8");
         await writeFile(absoluteJsonPath, JSON.stringify(metadataOnly, null, 4), "utf8");
-        this.syncedFiles.push(absoluteOutputPath, absoluteJsonPath);
+    }
+
+    /**
+     * Builds a Bedrock Knowledge Base "metadataAttributes" object: drops undefined/empty values,
+     * and joins string-array values (e.g. labels) into a single comma-separated string, since
+     * Bedrock metadata attribute values must be string, number, or boolean.
+     */
+    private buildMetadataAttributes(
+        attrs: Record<string, string | number | boolean | string[] | undefined>,
+    ): Record<string, string | number | boolean> {
+        const result: Record<string, string | number | boolean> = {};
+        for (const [key, value] of Object.entries(attrs)) {
+            if (value === undefined || value === "") continue;
+            if (Array.isArray(value)) {
+                if (value.length === 0) continue;
+                result[key] = value.join(", ");
+                continue;
+            }
+            result[key] = value;
+        }
+        return result;
     }
 
     // --- S3 upload ---
@@ -524,13 +578,16 @@ export class OnboardService {
     private static readonly ONBOARD_SUBDIRS = ["confluence", "jira", "google-docs", "google-sheets"] as const;
 
     /**
-     * Uploads the given local files (absolute paths, e.g. from sync()'s filesWritten) to the
-     * configured S3 bucket, mirroring their path relative to the local onboarding directory.
-     * For each file: ensures the destination "folder" prefix exists, skips upload if the object
-     * is already present in S3, otherwise uploads it.
+     * Uploads the given synced documents to the configured S3 bucket, mirroring each content
+     * file's path relative to the local onboarding directory as its S3 key. For each document:
+     * ensures the destination "folder" prefix exists, skips upload if the content object already
+     * exists in S3, otherwise uploads the content plus a Bedrock Knowledge Base-compliant
+     * "<key>.metadata.json" sidecar (i.e. `{ "metadataAttributes": {...} }`, at the exact same
+     * key with ".metadata.json" appended) — the naming Bedrock requires to recognize it as
+     * metadata for the content object rather than as its own separate document to ingest.
      */
-    public async uploadToS3(filePaths: string[]): Promise<{ uploaded: number; skipped: number; failed: number }> {
-        if (filePaths.length === 0) {
+    public async uploadToS3(files: SyncedDocument[]): Promise<{ uploaded: number; skipped: number; failed: number }> {
+        if (files.length === 0) {
             logger.warn("No files were synced in this run — nothing to upload to S3.");
             return { uploaded: 0, skipped: 0, failed: 0 };
         }
@@ -541,8 +598,9 @@ export class OnboardService {
         let skipped = 0;
         let failed = 0;
 
-        for (const filePath of filePaths) {
-            const key = relative(baseOnboardDir, filePath).split(sep).join("/");
+        for (const file of files) {
+            const key = relative(baseOnboardDir, file.contentPath).split(sep).join("/");
+            const metadataKey = `${key}.metadata.json`;
             try {
                 const folderPrefix = dirname(key);
                 if (folderPrefix && folderPrefix !== "." && !ensuredPrefixes.has(folderPrefix)) {
@@ -557,10 +615,15 @@ export class OnboardService {
                     continue;
                 }
 
-                const body = await readFile(filePath);
+                const body = await readFile(file.contentPath);
                 const contentType = key.endsWith(".json") ? "application/json" : "text/markdown";
                 await this.s3.putObject(key, body, contentType);
-                logger.info(`  s3: uploaded ${key}`);
+                await this.s3.putObject(
+                    metadataKey,
+                    JSON.stringify({ metadataAttributes: file.metadataAttributes }, null, 2),
+                    "application/json",
+                );
+                logger.info(`  s3: uploaded ${key} (+ ${metadataKey})`);
                 uploaded++;
             } catch (err) {
                 logger.error(`  s3: failed to upload ${key}: ${(err as Error).message}`);

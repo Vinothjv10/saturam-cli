@@ -1,4 +1,4 @@
-import { OnboardService } from "../../../src/services/onboarding/onboard.service";
+import { OnboardService, SyncedDocument } from "../../../src/services/onboarding/onboard.service";
 import { ConfluenceService } from "../../../src/integrations/confluence/services/confluence.service";
 import { JiraService } from "../../../src/integrations/jira/services/jira.service";
 import { GoogleDriveService } from "../../../src/integrations/google-drive/services/google-drive.service";
@@ -188,13 +188,25 @@ describe("OnboardService", () => {
             });
             mockConfluenceSource.fetch.mockResolvedValue(doc);
 
-            await service.sync(config, "/mock/cwd");
+            const result = await service.sync(config, "/mock/cwd");
 
             expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("123", {
                 baseUrl: "https://confluence.example.com",
             });
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
+
+            // sync() returns Bedrock-ready metadataAttributes alongside each content file's path
+            expect(result.filesWritten).toHaveLength(1);
+            expect(result.filesWritten[0].contentPath).toMatch(/\.md$/);
+            expect(result.filesWritten[0].metadataAttributes).toEqual({
+                title: "Test Confluence Page",
+                source: KnowledgeSourceType.CONFLUENCE,
+                url: "https://confluence.example.com/wiki/spaces/TST/pages/123",
+                category: "confluence",
+                updatedAt: "2026-07-01",
+                author: "Alice",
+            });
         });
 
         it("should use listAllPagesInSpace to resolve space pages (no inline while loop)", async () => {
@@ -505,9 +517,15 @@ describe("OnboardService", () => {
     });
 
     describe("uploadToS3", () => {
-        const files = [
-            "/mock/personal/onboarding/saturam/google-docs/doc.md",
-            "/mock/personal/onboarding/saturam/google-docs/doc.json",
+        const files: SyncedDocument[] = [
+            {
+                contentPath: "/mock/personal/onboarding/saturam/google-docs/doc.md",
+                metadataAttributes: { title: "Doc", category: "google-docs", project: "saturam" },
+            },
+            {
+                contentPath: "/mock/personal/onboarding/saturam/google-sheets/data.json",
+                metadataAttributes: { title: "Data", category: "google-sheets", project: "saturam", rowCount: 5 },
+            },
         ];
 
         it("does nothing and warns when there are no files to upload", async () => {
@@ -517,28 +535,50 @@ describe("OnboardService", () => {
             expect(mockS3.putObject).not.toHaveBeenCalled();
         });
 
-        it("ensures the folder prefix exists once per folder, then uploads new files", async () => {
+        it("ensures each folder prefix exists, then uploads content + a Bedrock metadata sidecar per file", async () => {
             (mockS3.objectExists as jest.Mock).mockResolvedValue(false);
             (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
 
             const result = await service.uploadToS3(files);
 
             expect(result).toEqual({ uploaded: 2, skipped: 0, failed: 0 });
-            expect(mockS3.ensurePrefixExists).toHaveBeenCalledTimes(1);
             expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("saturam/google-docs");
+            expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("saturam/google-sheets");
+
+            // Content object
             expect(mockS3.putObject).toHaveBeenCalledWith(
                 "saturam/google-docs/doc.md",
                 expect.any(Buffer),
                 "text/markdown",
             );
+            // Bedrock-compliant metadata sidecar: exact key + ".metadata.json", wrapped in metadataAttributes
             expect(mockS3.putObject).toHaveBeenCalledWith(
-                "saturam/google-docs/doc.json",
+                "saturam/google-docs/doc.md.metadata.json",
+                JSON.stringify({ metadataAttributes: files[0].metadataAttributes }, null, 2),
+                "application/json",
+            );
+
+            expect(mockS3.putObject).toHaveBeenCalledWith(
+                "saturam/google-sheets/data.json",
                 expect.any(Buffer),
                 "application/json",
             );
+            expect(mockS3.putObject).toHaveBeenCalledWith(
+                "saturam/google-sheets/data.json.metadata.json",
+                JSON.stringify({ metadataAttributes: files[1].metadataAttributes }, null, 2),
+                "application/json",
+            );
+
+            // Never uploads a bare ".json" bookkeeping sidecar under the content's own basename —
+            // that would be ingested by Bedrock as its own separate document.
+            expect(mockS3.putObject).not.toHaveBeenCalledWith(
+                "saturam/google-docs/doc.json",
+                expect.anything(),
+                expect.anything(),
+            );
         });
 
-        it("skips files that already exist in S3", async () => {
+        it("skips both content and metadata sidecar for files that already exist in S3", async () => {
             (mockS3.objectExists as jest.Mock).mockResolvedValue(true);
 
             const result = await service.uploadToS3(files);
@@ -552,7 +592,7 @@ describe("OnboardService", () => {
             (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
             (mockS3.putObject as jest.Mock)
                 .mockRejectedValueOnce(new Error("Access Denied"))
-                .mockResolvedValueOnce(undefined);
+                .mockResolvedValue(undefined);
 
             const result = await service.uploadToS3(files);
 

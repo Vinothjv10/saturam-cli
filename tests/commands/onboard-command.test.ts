@@ -113,9 +113,13 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     });
 
     it("should call uploadToS3 with the files written when --upload-to-s3 is passed", async () => {
-        (mockOnboardService.sync as jest.Mock).mockResolvedValue({
-            filesWritten: ["/mock/onboarding/google-docs/saturam/doc.md"],
-        });
+        const filesWritten = [
+            {
+                contentPath: "/mock/onboarding/saturam/google-docs/doc.md",
+                metadataAttributes: { title: "Doc", category: "google-docs", project: "saturam" },
+            },
+        ];
+        (mockOnboardService.sync as jest.Mock).mockResolvedValue({ filesWritten });
 
         await command.execute({
             configOrSheet: undefined,
@@ -124,7 +128,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             list: undefined,
         });
 
-        expect(mockOnboardService.uploadToS3).toHaveBeenCalledWith(["/mock/onboarding/google-docs/saturam/doc.md"]);
+        expect(mockOnboardService.uploadToS3).toHaveBeenCalledWith(filesWritten);
     });
 
     it("should not call uploadToS3 when --upload-to-s3 is not passed", async () => {
