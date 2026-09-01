@@ -336,6 +336,44 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(String(messages[1].content)).toContain("what is the auth flow?");
         });
 
+        it("shows a terminal loading spinner while waiting for the chat answer", async () => {
+            const originalIsTTY = process.stderr.isTTY;
+            const writeSpy = jest.spyOn(process.stderr, "write").mockImplementation(() => true);
+            Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+
+            try {
+                (input as jest.Mock).mockResolvedValueOnce("what is onboarding?").mockResolvedValueOnce("");
+                (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
+                    { content: "onboarding docs", score: 0.9, location: "s3://bucket/onboarding.md" },
+                ]);
+
+                let resolveAnswer!: (answer: string) => void;
+                (mockLlmService.prompt as jest.Mock).mockImplementationOnce(
+                    () =>
+                        new Promise<string>((resolve) => {
+                            resolveAnswer = resolve;
+                        }),
+                );
+
+                const run = command.execute(chatInputs);
+                for (let i = 0; i < 10 && !resolveAnswer; i += 1) {
+                    await Promise.resolve();
+                }
+
+                expect(writeSpy).toHaveBeenCalledWith(
+                    expect.stringContaining("Retrieving context and generating answer"),
+                );
+
+                resolveAnswer("Onboarding is documented. [1]");
+                await run;
+
+                expect(writeSpy).toHaveBeenCalledWith(expect.stringMatching(/^\r\s+\r$/));
+            } finally {
+                Object.defineProperty(process.stderr, "isTTY", { value: originalIsTTY, configurable: true });
+                writeSpy.mockRestore();
+            }
+        });
+
         it("logs an error and keeps looping when the LLM call throws", async () => {
             (input as jest.Mock).mockResolvedValueOnce("bad query").mockResolvedValueOnce("");
             (mockLlmService.prompt as jest.Mock).mockRejectedValueOnce(new Error("No API key found"));

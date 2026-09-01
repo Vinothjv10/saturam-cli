@@ -113,6 +113,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     }
 
     private static readonly KB_EXIT_COMMANDS = new Set(["exit", "quit", ":q"]);
+    private static readonly LOADING_FRAMES = ["-", "\\", "|", "/"];
 
     /**
      * Prompts for one question. Returns the trimmed question, or null to signal the REPL
@@ -135,6 +136,28 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         return trimmed;
     }
 
+    private async withLoading<T>(message: string, task: () => Promise<T>): Promise<T> {
+        if (!process.stderr.isTTY) {
+            return task();
+        }
+
+        let frameIndex = 0;
+        const render = () => {
+            const frame = OnboardCommand.LOADING_FRAMES[frameIndex % OnboardCommand.LOADING_FRAMES.length];
+            process.stderr.write(`\r${frame} ${message}...`);
+            frameIndex += 1;
+        };
+
+        render();
+        const timer = setInterval(render, 120);
+        try {
+            return await task();
+        } finally {
+            clearInterval(timer);
+            process.stderr.write(`\r${" ".repeat(message.length + 6)}\r`);
+        }
+    }
+
     /**
      * Interactive REPL: repeatedly prompts for a question, calls Bedrock Knowledge Base
      * Retrieve (no generation — equivalent to the AWS console's "Retrieve only" test mode),
@@ -152,7 +175,9 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             }
 
             try {
-                const results = await this.knowledgeBase.retrieve(question);
+                const results = await this.withLoading("Retrieving matching knowledge base chunks", () =>
+                    this.knowledgeBase.retrieve(question),
+                );
                 if (results.length === 0) {
                     logger.info("No matching results found.\n");
                     continue;
@@ -203,9 +228,12 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             }
 
             try {
-                const chunks = await this.knowledgeBase.retrieve(question);
-                const { system, user } = getKnowledgeBaseChatMessages({ question, chunks });
-                const answer = await this.llmService.prompt([system, user]);
+                const { chunks, answer } = await this.withLoading("Retrieving context and generating answer", async () => {
+                    const chunks = await this.knowledgeBase.retrieve(question);
+                    const { system, user } = getKnowledgeBaseChatMessages({ question, chunks });
+                    const answer = await this.llmService.prompt([system, user]);
+                    return { chunks, answer };
+                });
 
                 logger.info(`\n${answer.trim()}\n`);
                 if (chunks.length > 0) {
