@@ -1,4 +1,10 @@
-import { ConfigService, AIProvider, CloudProvider } from "../../src/services/config-service";
+import {
+    ConfigService,
+    AIProvider,
+    CloudProvider,
+    PersonalConfigurationSchema,
+} from "../../src/services/config-service";
+import { LLMModel } from "../../src/constants/llm-models";
 import { WorkingDirectory } from "../../src/utils/working-directory";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
@@ -135,6 +141,35 @@ describe("ConfigService Onboarding Credentials", () => {
 
         it("should throw if Atlassian credentials are missing", async () => {
             await expect(service.getGenericAtlassianCredentials()).rejects.toThrow("No Atlassian credentials found");
+        });
+    });
+
+    describe("retired model ID migration (PersonalConfigurationSchema)", () => {
+        it("migrates a retired Gemini defaultModel to its current replacement", () => {
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: "gemini-2.5-flash" });
+            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_7_FLASH);
+        });
+
+        it("migrates gemini-2.5-pro and the older gemini-3-pro/gemini-3-flash IDs", () => {
+            expect(PersonalConfigurationSchema.parse({ defaultModel: "gemini-2.5-pro" }).defaultModel).toBe(
+                LLMModel.GEMINI_3_1_PRO,
+            );
+            expect(PersonalConfigurationSchema.parse({ defaultModel: "gemini-3-pro" }).defaultModel).toBe(
+                LLMModel.GEMINI_3_1_PRO,
+            );
+            expect(PersonalConfigurationSchema.parse({ defaultModel: "gemini-3-flash" }).defaultModel).toBe(
+                LLMModel.GEMINI_3_7_FLASH,
+            );
+        });
+
+        it("leaves a current model ID untouched", () => {
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: LLMModel.GEMINI_3_6_FLASH });
+            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_6_FLASH);
+        });
+
+        it("still strips region prefixes for Bedrock model IDs", () => {
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: "us.anthropic.claude-opus-4-6-v1" });
+            expect(parsed.defaultModel).toBe(LLMModel.BEDROCK_CLAUDE_4_6_OPUS);
         });
     });
 

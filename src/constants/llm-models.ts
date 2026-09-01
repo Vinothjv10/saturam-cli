@@ -23,10 +23,10 @@ export enum LLMModel {
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
 
     // Google Gemini
-    GEMINI_2_5_PRO = "gemini-2.5-pro",
-    GEMINI_2_5_FLASH = "gemini-2.5-flash",
-    GEMINI_3_PRO = "gemini-3-pro",
-    GEMINI_3_FLASH = "gemini-3-flash",
+    GEMINI_3_1_PRO = "gemini-3.1-pro",
+    GEMINI_3_7_FLASH = "gemini-3.7-flash",
+    GEMINI_3_6_FLASH = "gemini-3.6-flash",
+    GEMINI_3_5_FLASH = "gemini-3.5-flash",
 
     // OpenAI
     OPENAI_GPT_4O = "gpt-4o",
@@ -87,10 +87,10 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: 1000000,
     [LLMModel.BEDROCK_NOVA_PRO]: 300000,
     // Gemini
-    [LLMModel.GEMINI_2_5_PRO]: 1000000,
-    [LLMModel.GEMINI_2_5_FLASH]: 1000000,
-    [LLMModel.GEMINI_3_PRO]: 1000000,
-    [LLMModel.GEMINI_3_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_1_PRO]: 1000000,
+    [LLMModel.GEMINI_3_7_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_6_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_5_FLASH]: 1000000,
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: 128000,
     [LLMModel.OPENAI_GPT_5]: 128000,
@@ -148,10 +148,10 @@ const BEDROCK_MODELS = new Set([
     LLMModel.BEDROCK_NOVA_PRO,
 ]);
 const GEMINI_MODELS = new Set([
-    LLMModel.GEMINI_2_5_PRO,
-    LLMModel.GEMINI_2_5_FLASH,
-    LLMModel.GEMINI_3_PRO,
-    LLMModel.GEMINI_3_FLASH,
+    LLMModel.GEMINI_3_1_PRO,
+    LLMModel.GEMINI_3_7_FLASH,
+    LLMModel.GEMINI_3_6_FLASH,
+    LLMModel.GEMINI_3_5_FLASH,
 ]);
 const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GPT_4O,

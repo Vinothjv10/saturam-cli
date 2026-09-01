@@ -80,7 +80,21 @@ export const CloudProviderConfigSchema = z.object({
 
 export type CloudProviderConfig = z.infer<typeof CloudProviderConfigSchema>;
 
-const migrateModelId = (val: unknown) => (typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val);
+// Retired/renamed model IDs -> their current replacement. Keeps previously-saved configs
+// (e.g. a Gemini model retired by the provider) working after an upgrade, without requiring
+// the user to re-run 'sat-cli init'.
+const RETIRED_MODEL_MIGRATIONS: Record<string, LLMModel> = {
+    "gemini-2.5-pro": LLMModel.GEMINI_3_1_PRO,
+    "gemini-2.5-flash": LLMModel.GEMINI_3_7_FLASH,
+    "gemini-3-pro": LLMModel.GEMINI_3_1_PRO,
+    "gemini-3-flash": LLMModel.GEMINI_3_7_FLASH,
+};
+
+const migrateModelId = (val: unknown) => {
+    if (typeof val !== "string") return val;
+    const withoutRegionPrefix = val.replace(/^(us|eu|ap)\./, "");
+    return RETIRED_MODEL_MIGRATIONS[withoutRegionPrefix] ?? withoutRegionPrefix;
+};
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
@@ -143,10 +157,10 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.BEDROCK_NOVA_PRO,
     ],
     [AIProvider.GOOGLE]: [
-        LLMModel.GEMINI_2_5_PRO,
-        LLMModel.GEMINI_2_5_FLASH,
-        LLMModel.GEMINI_3_PRO,
-        LLMModel.GEMINI_3_FLASH,
+        LLMModel.GEMINI_3_1_PRO,
+        LLMModel.GEMINI_3_7_FLASH,
+        LLMModel.GEMINI_3_6_FLASH,
+        LLMModel.GEMINI_3_5_FLASH,
     ],
     [AIProvider.OPENAI]: [
         LLMModel.OPENAI_GPT_4O,
