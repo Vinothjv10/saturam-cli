@@ -1,11 +1,18 @@
+import { input } from "@inquirer/prompts";
 import { OnboardCommand } from "../../src/commands/onboard-command";
 import { OnboardService } from "../../src/services/onboarding/onboard.service";
 import { ConfigService } from "../../src/services/config-service";
+import { BedrockKnowledgeBaseService } from "../../src/integrations/aws/services/bedrock-knowledge-base.service";
+
+jest.mock("@inquirer/prompts", () => ({
+    input: jest.fn(),
+}));
 
 describe("OnboardCommand Dual-Mode Routing", () => {
     let command: OnboardCommand;
     let mockOnboardService: jest.Mocked<OnboardService>;
     let mockConfigService: jest.Mocked<ConfigService>;
+    let mockKnowledgeBase: jest.Mocked<BedrockKnowledgeBaseService>;
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -21,7 +28,11 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             }),
         } as any;
 
-        command = new OnboardCommand(mockOnboardService, mockConfigService);
+        mockKnowledgeBase = {
+            retrieve: jest.fn().mockResolvedValue([]),
+        } as any;
+
+        command = new OnboardCommand(mockOnboardService, mockConfigService, mockKnowledgeBase);
     });
 
     it("should route to Google Sheet mode when passed a Google Sheets URL", async () => {
@@ -30,6 +41,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": undefined,
             "upload-to-s3": undefined,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -47,6 +59,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": undefined,
             "upload-to-s3": undefined,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -64,6 +77,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": undefined,
             "upload-to-s3": undefined,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(
@@ -84,6 +98,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": "custom-project",
             "upload-to-s3": undefined,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -101,6 +116,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": "custom-project",
             "upload-to-s3": undefined,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -126,6 +142,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": "Saturam",
             "upload-to-s3": true,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.uploadToS3).toHaveBeenCalledWith(filesWritten);
@@ -137,6 +154,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": undefined,
             "upload-to-s3": undefined,
             list: undefined,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.uploadToS3).not.toHaveBeenCalled();
@@ -148,10 +166,96 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             "project-name": undefined,
             "upload-to-s3": undefined,
             list: true,
+            "knowledge-base": undefined,
         });
 
         expect(mockOnboardService.listSyncedDocuments).toHaveBeenCalledTimes(1);
         expect(mockOnboardService.sync).not.toHaveBeenCalled();
         expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
+    });
+
+    describe("--knowledge-base interactive search", () => {
+        it("skips syncing entirely and enters the search loop", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("");
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": true,
+            });
+
+            expect(mockOnboardService.sync).not.toHaveBeenCalled();
+            expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
+            expect(input).toHaveBeenCalledTimes(1);
+        });
+
+        it("exits immediately on blank input", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("   ");
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": true,
+            });
+
+            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+        });
+
+        it("exits on 'exit' or 'quit' (case-insensitive)", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("EXIT");
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": true,
+            });
+
+            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+        });
+
+        it("retrieves results for each question until exit", async () => {
+            (input as jest.Mock)
+                .mockResolvedValueOnce("what is the auth flow?")
+                .mockResolvedValueOnce("what is onboarding?")
+                .mockResolvedValueOnce("");
+            (mockKnowledgeBase.retrieve as jest.Mock)
+                .mockResolvedValueOnce([{ content: "chunk one", score: 0.9, location: "s3://bucket/key.md" }])
+                .mockResolvedValueOnce([]);
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": true,
+            });
+
+            expect(mockKnowledgeBase.retrieve).toHaveBeenCalledTimes(2);
+            expect(mockKnowledgeBase.retrieve).toHaveBeenNthCalledWith(1, "what is the auth flow?");
+            expect(mockKnowledgeBase.retrieve).toHaveBeenNthCalledWith(2, "what is onboarding?");
+        });
+
+        it("logs an error and keeps looping when retrieve throws", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("bad query").mockResolvedValueOnce("");
+            (mockKnowledgeBase.retrieve as jest.Mock).mockRejectedValueOnce(new Error("KB not configured"));
+
+            await expect(
+                command.execute({
+                    configOrSheet: undefined,
+                    "project-name": undefined,
+                    "upload-to-s3": undefined,
+                    list: undefined,
+                    "knowledge-base": true,
+                }),
+            ).resolves.toBeUndefined();
+
+            expect(input).toHaveBeenCalledTimes(2);
+        });
     });
 });
