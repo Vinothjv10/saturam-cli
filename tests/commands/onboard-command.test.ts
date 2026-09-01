@@ -219,6 +219,24 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
         });
 
+        it("treats Ctrl+C as a normal exit", async () => {
+            const exitError = new Error("User force closed the prompt");
+            exitError.name = "ExitPromptError";
+            (input as jest.Mock).mockRejectedValueOnce(exitError);
+
+            await expect(
+                command.execute({
+                    configOrSheet: undefined,
+                    "project-name": undefined,
+                    "upload-to-s3": undefined,
+                    list: undefined,
+                    "knowledge-base": true,
+                }),
+            ).resolves.toBeUndefined();
+
+            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+        });
+
         it("retrieves results for each question until exit", async () => {
             (input as jest.Mock)
                 .mockResolvedValueOnce("what is the auth flow?")

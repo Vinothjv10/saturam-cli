@@ -219,6 +219,16 @@ Local content files always mirror their path under `~/.config/sateng/onboarding/
 sat-cli onboard --list
 ```
 
+#### Testing Bedrock Knowledge Base Retrieval
+
+Use the AWS credentials and Bedrock Knowledge Base configured by `sat-cli init` to run the equivalent of the AWS console's **Standard retrieval only** mode directly in the terminal:
+
+```bash
+sat-cli onboard --knowledge-base
+```
+
+Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
+
 ---
 
 ## 5. Troubleshooting & Expiration Notes

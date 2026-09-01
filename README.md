@@ -108,9 +108,14 @@ sat-cli onboard --project-name "Saturam Core" --upload-to-s3
 
 # List locally synced documents, grouped by project name, without syncing
 sat-cli onboard --list
+
+# Interactively test the configured Bedrock Knowledge Base using retrieval only
+sat-cli onboard --knowledge-base
 ```
 
 For more details on onboarding sync configuration and features, see [ONBOARDING.md](ONBOARDING.md).
+
+`--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
 ## Cloud (AWS S3 & Bedrock Knowledge Base)
 

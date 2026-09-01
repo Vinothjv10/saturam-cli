@@ -2,9 +2,10 @@ import { BedrockKnowledgeBaseService } from "../../../../src/integrations/aws/se
 import { ConfigService } from "../../../../src/services/config-service";
 
 const mockSend = jest.fn();
+const mockBedrockClient = jest.fn().mockImplementation(() => ({ send: mockSend }));
 
 jest.mock("@aws-sdk/client-bedrock-agent-runtime", () => ({
-    BedrockAgentRuntimeClient: jest.fn().mockImplementation(() => ({ send: mockSend })),
+    BedrockAgentRuntimeClient: mockBedrockClient,
     RetrieveCommand: jest.fn().mockImplementation((input) => ({ input })),
 }));
 
@@ -18,7 +19,7 @@ describe("BedrockKnowledgeBaseService", () => {
             getAWSCloudConfig: jest.fn().mockResolvedValue({ enabled: true, awsRegion: "us-east-1" }),
             getBedrockKnowledgeBaseConfig: jest
                 .fn()
-                .mockResolvedValue({ knowledgeBaseId: "KB123", region: "us-east-1" }),
+                .mockResolvedValue({ knowledgeBaseId: "KB123", region: "ap-south-1" }),
         } as any;
         service = new BedrockKnowledgeBaseService(mockConfig);
     });
@@ -30,13 +31,22 @@ describe("BedrockKnowledgeBaseService", () => {
                     content: { text: "chunk one" },
                     score: 0.9,
                     location: { s3Location: { uri: "s3://bucket/key.md" } },
+                    metadata: { project: "saturam", category: "google-docs" },
                 },
             ],
         });
 
         const results = await service.retrieve("what is the auth flow?", { numberOfResults: 3 });
 
-        expect(results).toEqual([{ content: "chunk one", score: 0.9, location: "s3://bucket/key.md" }]);
+        expect(results).toEqual([
+            {
+                content: "chunk one",
+                score: 0.9,
+                location: "s3://bucket/key.md",
+                metadata: { project: "saturam", category: "google-docs" },
+            },
+        ]);
+        expect(mockBedrockClient).toHaveBeenCalledWith(expect.objectContaining({ region: "ap-south-1" }));
         expect(mockSend).toHaveBeenCalledWith(
             expect.objectContaining({
                 input: expect.objectContaining({

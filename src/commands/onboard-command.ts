@@ -110,7 +110,18 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         logger.info("Type a question and press Enter. Type 'exit' or leave blank to quit.\n");
 
         for (;;) {
-            const question = await input({ message: "Question:" });
+            let question: string;
+            try {
+                question = await input({ message: "Question:" });
+            } catch (err) {
+                // Inquirer signals Ctrl+C using ExitPromptError. Treat it as a
+                // normal REPL exit instead of making the whole CLI fail.
+                if (err instanceof Error && err.name === "ExitPromptError") {
+                    logger.info("\nExiting knowledge base search.");
+                    return;
+                }
+                throw err;
+            }
             const trimmed = question.trim();
             if (!trimmed || OnboardCommand.KB_EXIT_COMMANDS.has(trimmed.toLowerCase())) {
                 logger.info("Exiting knowledge base search.");
@@ -129,6 +140,9 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                     const scoreText = result.score !== undefined ? ` (score: ${result.score.toFixed(3)})` : "";
                     logger.info(`\n${index + 1}.${scoreText}`);
                     if (result.location) logger.info(`   source: ${result.location}`);
+                    if (result.metadata && Object.keys(result.metadata).length > 0) {
+                        logger.info(`   metadata: ${JSON.stringify(result.metadata)}`);
+                    }
                     logger.info(`   ${result.content.trim()}`);
                 });
                 logger.info("");
