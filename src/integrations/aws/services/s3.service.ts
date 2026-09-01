@@ -11,14 +11,14 @@ export class S3Service {
 
     constructor(private readonly config: ConfigService) {}
 
-    private async getClient(): Promise<import("@aws-sdk/client-s3").S3Client> {
+    private async getClient(region: string): Promise<import("@aws-sdk/client-s3").S3Client> {
         if (this.client) return this.client;
 
         const { S3Client } = await import("@aws-sdk/client-s3");
         const cloudConfig = await this.config.getAWSCloudConfig();
         const clientConfig = await resolveAwsClientConfig(cloudConfig);
 
-        this.client = new S3Client(clientConfig);
+        this.client = new S3Client({ ...clientConfig, region });
         return this.client;
     }
 
@@ -33,8 +33,8 @@ export class S3Service {
      */
     public async getObject(key: string): Promise<Buffer> {
         const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-        const { bucket, prefix } = await this.config.getS3Config();
-        const client = await this.getClient();
+        const { bucket, prefix, region } = await this.config.getS3Config();
+        const client = await this.getClient(region);
         const fullKey = this.resolveKey(key, prefix);
 
         logger.debug(`Fetching s3://${bucket}/${fullKey}`);
@@ -56,8 +56,8 @@ export class S3Service {
      */
     public async objectExists(key: string): Promise<boolean> {
         const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
-        const { bucket, prefix } = await this.config.getS3Config();
-        const client = await this.getClient();
+        const { bucket, prefix, region } = await this.config.getS3Config();
+        const client = await this.getClient(region);
         const fullKey = this.resolveKey(key, prefix);
 
         try {
@@ -91,8 +91,8 @@ export class S3Service {
      */
     public async putObject(key: string, body: Buffer | string, contentType?: string): Promise<void> {
         const { PutObjectCommand } = await import("@aws-sdk/client-s3");
-        const { bucket, prefix } = await this.config.getS3Config();
-        const client = await this.getClient();
+        const { bucket, prefix, region } = await this.config.getS3Config();
+        const client = await this.getClient(region);
         const fullKey = this.resolveKey(key, prefix);
 
         logger.debug(`Uploading s3://${bucket}/${fullKey}`);
@@ -112,8 +112,8 @@ export class S3Service {
      */
     public async listObjects(subPrefix?: string): Promise<string[]> {
         const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
-        const { bucket, prefix } = await this.config.getS3Config();
-        const client = await this.getClient();
+        const { bucket, prefix, region } = await this.config.getS3Config();
+        const client = await this.getClient(region);
         const effectivePrefix = subPrefix ? this.resolveKey(subPrefix, prefix) : prefix;
 
         try {

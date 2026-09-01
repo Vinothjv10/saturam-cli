@@ -164,6 +164,18 @@ describe("ConfigService Onboarding Credentials", () => {
             const s3Config = await service.getS3Config();
             expect(s3Config).toEqual({ bucket: "my-bucket", prefix: "docs", region: "eu-west-1" });
         });
+
+        it("should throw if S3 has no bucket region or AWS region", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: {
+                    [CloudProvider.AWS]: {
+                        enabled: true,
+                        s3: { bucket: "my-bucket", prefix: "docs" },
+                    },
+                },
+            } as any);
+            await expect(service.getS3Config()).rejects.toThrow("S3 region is not configured");
+        });
     });
 
     describe("getBedrockKnowledgeBaseConfig", () => {
@@ -188,6 +200,20 @@ describe("ConfigService Onboarding Credentials", () => {
             } as any);
             const kbConfig = await service.getBedrockKnowledgeBaseConfig();
             expect(kbConfig).toEqual({ knowledgeBaseId: "KB123", dataSourceId: "DS1", region: "us-east-1" });
+        });
+
+        it("should throw if Knowledge Base has no region or AWS region", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: {
+                    [CloudProvider.AWS]: {
+                        enabled: true,
+                        bedrockKnowledgeBase: { knowledgeBaseId: "KB123", dataSourceId: "DS1" },
+                    },
+                },
+            } as any);
+            await expect(service.getBedrockKnowledgeBaseConfig()).rejects.toThrow(
+                "Bedrock Knowledge Base region is not configured",
+            );
         });
     });
 

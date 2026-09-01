@@ -542,10 +542,16 @@ export class ConfigService {
                 "S3 is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and configure S3 bucket access.",
             );
         }
+        const region = cloudConfig.s3.region ?? cloudConfig.awsRegion;
+        if (!region) {
+            throw new Error(
+                "S3 region is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and set an AWS region or bucket region.",
+            );
+        }
         return {
             bucket: cloudConfig.s3.bucket,
             prefix: cloudConfig.s3.prefix,
-            region: cloudConfig.s3.region ?? cloudConfig.awsRegion ?? "us-east-1",
+            region,
         };
     }
 
@@ -560,10 +566,16 @@ export class ConfigService {
                 "Bedrock Knowledge Base is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and configure Bedrock Knowledge Base retrieval.",
             );
         }
+        const region = cloudConfig.bedrockKnowledgeBase.region ?? cloudConfig.awsRegion;
+        if (!region) {
+            throw new Error(
+                "Bedrock Knowledge Base region is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and set an AWS region or knowledge base region.",
+            );
+        }
         return {
             knowledgeBaseId: cloudConfig.bedrockKnowledgeBase.knowledgeBaseId,
             dataSourceId: cloudConfig.bedrockKnowledgeBase.dataSourceId,
-            region: cloudConfig.bedrockKnowledgeBase.region ?? cloudConfig.awsRegion ?? "us-east-1",
+            region,
         };
     }
 

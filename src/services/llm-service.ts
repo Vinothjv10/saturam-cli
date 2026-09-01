@@ -150,7 +150,10 @@ export class LlmService {
     private async createBedrockModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const { ChatBedrockConverse } = await import("@langchain/aws");
         const providerConfig = await this.config.getProviderConfig(AIProvider.BEDROCK);
-        const region = providerConfig?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1";
+        const region = providerConfig?.awsRegion ?? process.env.AWS_REGION;
+        if (!region) {
+            throw new Error("AWS Bedrock region is not configured. Run 'sat-cli init' and configure the Bedrock provider.");
+        }
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
         const credentials: any = profile

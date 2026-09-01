@@ -2,9 +2,10 @@ import { S3Service } from "../../../../src/integrations/aws/services/s3.service"
 import { ConfigService } from "../../../../src/services/config-service";
 
 const mockSend = jest.fn();
+const mockS3Client = jest.fn().mockImplementation(() => ({ send: mockSend }));
 
 jest.mock("@aws-sdk/client-s3", () => ({
-    S3Client: jest.fn().mockImplementation(() => ({ send: mockSend })),
+    S3Client: mockS3Client,
     GetObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
     PutObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
     ListObjectsV2Command: jest.fn().mockImplementation((input) => ({ input })),
@@ -22,6 +23,16 @@ describe("S3Service", () => {
             getS3Config: jest.fn().mockResolvedValue({ bucket: "my-bucket", prefix: "docs", region: "us-east-1" }),
         } as any;
         service = new S3Service(mockConfig);
+    });
+
+    it("creates the S3 client with the configured bucket region", async () => {
+        mockConfig.getAWSCloudConfig.mockResolvedValueOnce({ enabled: true, awsRegion: "us-east-1" } as any);
+        mockConfig.getS3Config.mockResolvedValueOnce({ bucket: "my-bucket", prefix: "docs", region: "ap-south-1" });
+        mockSend.mockResolvedValueOnce({});
+
+        await service.putObject("file.md", "content");
+
+        expect(mockS3Client).toHaveBeenCalledWith(expect.objectContaining({ region: "ap-south-1" }));
     });
 
     it("getObject fetches from the prefixed key and returns a Buffer", async () => {

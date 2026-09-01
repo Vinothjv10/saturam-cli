@@ -18,7 +18,10 @@ export interface AwsClientConfig {
  * - Otherwise falls back to the SDK's default credential provider chain (credentials undefined).
  */
 export async function resolveAwsClientConfig(cloudConfig: CloudProviderConfig): Promise<AwsClientConfig> {
-    const region = cloudConfig.awsRegion ?? "us-east-1";
+    if (!cloudConfig.awsRegion) {
+        throw new Error("AWS region is not configured. Run 'sat-cli init' and configure AWS cloud settings.");
+    }
+    const region = cloudConfig.awsRegion;
 
     if (cloudConfig.awsAuthMethod === "keys" && cloudConfig.awsAccessKeyId && cloudConfig.awsSecretAccessKey) {
         return {

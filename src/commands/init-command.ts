@@ -346,7 +346,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const awsRegion = await input({
             message: "AWS region:",
-            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
+            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "",
+            validate: (val) => (val.trim() ? true : "AWS region is required"),
         });
 
         let s3: CloudProviderConfig["s3"] = existing?.s3;
@@ -506,7 +507,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const awsRegion = await input({
             message: "AWS region:",
-            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
+            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "",
+            validate: (val) => (val.trim() ? true : "AWS region is required"),
         });
 
         // Verify AWS credentials if profile given
@@ -988,7 +990,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
                 if (provider === AIProvider.BEDROCK) {
                     const profile = val.awsProfile ?? "default chain";
-                    const region = val.awsRegion ?? "us-east-1";
+                    const region = val.awsRegion ?? "not set";
                     logger.info(
                         `    ${PROVIDER_DISPLAY_NAMES[provider]}: profile=${profile}, region=${region}${isDefault}`,
                     );
@@ -1053,7 +1055,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 awsCloud.awsAuthMethod === "keys"
                     ? `access keys${awsCloud.awsSecretAccessKey ? " (configured)" : ""}`
                     : `profile=${awsCloud.awsProfile ?? "default chain"}`;
-            logger.info(`    AWS: ${authDesc}, region=${awsCloud.awsRegion ?? "us-east-1"}`);
+            logger.info(`    AWS: ${authDesc}, region=${awsCloud.awsRegion ?? "not set"}`);
             if (awsCloud.s3) {
                 logger.info(
                     `      S3 bucket: ${awsCloud.s3.bucket}${awsCloud.s3.prefix ? `/${awsCloud.s3.prefix}` : ""}`,

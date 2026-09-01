@@ -458,7 +458,7 @@ All settings can also be provided via environment variables, which take priority
 | `XAI_API_KEY`              | xAI (Grok)                                 |
 | `DEEPSEEK_API_KEY`         | DeepSeek                                   |
 | `AWS_PROFILE`              | AWS Bedrock                                |
-| `AWS_REGION`               | AWS Bedrock region (default: `us-east-1`)  |
+| `AWS_REGION`               | AWS Bedrock region                         |
 | `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`) |
 | `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama    |
 | `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                   |
