@@ -168,6 +168,16 @@ Fetch and synchronize documents based on the `.sateng/onboarding.json` targets:
 npx ts-node src/entrypoints/main.ts onboard
 ```
 
+#### Generating a Sample Config
+
+If you don't have a `.sateng/onboarding.json` yet, generate one with example Confluence, Jira, and Google Drive (Docs/Sheets) entries:
+
+```bash
+sat-cli onboard --format
+```
+
+This writes the template to `.sateng/onboarding.json` in the current directory. If that file already exists, it writes to `.sateng/onboarding.sample.json` instead so your existing config is never overwritten. Edit the generated file with your real page IDs, ticket keys, and document IDs, then run `sat-cli onboard` to sync.
+
 #### Mode B: Sync Directly from a Google Sheet
 
 Fetch and synchronize documents directly from a Google Sheet URL or spreadsheet ID without needing local config files:

@@ -1,4 +1,7 @@
 import { input } from "@inquirer/prompts";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { OnboardCommand } from "../../src/commands/onboard-command";
 import { OnboardService } from "../../src/services/onboarding/onboard.service";
 import { ConfigService } from "../../src/services/config-service";
@@ -207,7 +210,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(input).toHaveBeenCalledTimes(1);
             expect(input).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    message: "Ask Saturam-Cli :",
+                    message: "Ask Saturam-CLI :",
                     theme: { prefix: { idle: "🤖", done: "🤖" } },
                 }),
             );
@@ -423,6 +426,58 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
             expect(mockLlmService.prompt).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("--format sample config generation", () => {
+        let tmpDir: string;
+        let originalCwdEnv: string | undefined;
+
+        beforeEach(() => {
+            tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sateng-onboard-format-"));
+            originalCwdEnv = process.env.SATENG_ORIGINAL_CWD;
+            process.env.SATENG_ORIGINAL_CWD = tmpDir;
+        });
+
+        afterEach(() => {
+            if (originalCwdEnv === undefined) {
+                delete process.env.SATENG_ORIGINAL_CWD;
+            } else {
+                process.env.SATENG_ORIGINAL_CWD = originalCwdEnv;
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        });
+
+        it("writes a sample onboarding.json with Confluence, Jira, and Google Drive entries, and skips syncing", async () => {
+            await command.execute({ format: true } as any);
+
+            const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
+            expect(fs.existsSync(configPath)).toBe(true);
+
+            const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+            expect(written.confluence.baseUrl).toBeTruthy();
+            expect(written.jira.baseUrl).toBeTruthy();
+            expect(written.projects.ExampleProject.confluence.pages).toEqual(["123456789"]);
+            expect(written.projects.ExampleProject.jira.tickets).toEqual(["PROJ-123"]);
+            expect(written.projects.ExampleProject.googleDocs.docs).toEqual(["your-google-doc-id-here"]);
+            expect(written.projects.ExampleProject.googleSheets.spreadsheetId).toBe("your-google-sheet-id-here");
+
+            expect(mockOnboardService.sync).not.toHaveBeenCalled();
+        });
+
+        it("does not overwrite an existing onboarding.json, writing onboarding.sample.json instead", async () => {
+            const configDir = path.join(tmpDir, ".sateng");
+            fs.mkdirSync(configDir, { recursive: true });
+            const existingPath = path.join(configDir, "onboarding.json");
+            fs.writeFileSync(existingPath, JSON.stringify({ confluence: { baseUrl: "https://existing" } }));
+
+            await command.execute({ format: true } as any);
+
+            const existingAfter = JSON.parse(fs.readFileSync(existingPath, "utf-8"));
+            expect(existingAfter.confluence.baseUrl).toBe("https://existing");
+
+            const samplePath = path.join(configDir, "onboarding.sample.json");
+            expect(fs.existsSync(samplePath)).toBe(true);
         });
     });
 });
