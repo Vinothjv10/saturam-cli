@@ -52,6 +52,41 @@ export class S3Service {
     }
 
     /**
+     * Checks whether an object already exists at the given key (relative to the configured prefix, if any).
+     */
+    public async objectExists(key: string): Promise<boolean> {
+        const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+        const { bucket, prefix } = await this.config.getS3Config();
+        const client = await this.getClient();
+        const fullKey = this.resolveKey(key, prefix);
+
+        try {
+            await client.send(new HeadObjectCommand({ Bucket: bucket, Key: fullKey }));
+            return true;
+        } catch (err) {
+            const statusCode = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+            const name = (err as { name?: string }).name;
+            if (statusCode === 404 || name === "NotFound" || name === "NoSuchKey") {
+                return false;
+            }
+            throw new Error(`Failed to check s3://${bucket}/${fullKey}: ${(err as Error).message}`);
+        }
+    }
+
+    /**
+     * Ensures a "folder" prefix exists in the bucket (S3 has no real folders — this creates the
+     * zero-byte marker object, e.g. "google-docs/saturam/", that the console/CLI treat as one).
+     * No-op if an object already exists under that prefix.
+     */
+    public async ensurePrefixExists(folderPrefix: string): Promise<void> {
+        const normalized = folderPrefix.endsWith("/") ? folderPrefix : `${folderPrefix}/`;
+        const existingKeys = await this.listObjects(normalized);
+        if (existingKeys.length > 0) return;
+
+        await this.putObject(normalized, "");
+    }
+
+    /**
      * Uploads an object to the configured S3 bucket (key is relative to the configured prefix, if any).
      */
     public async putObject(key: string, body: Buffer | string, contentType?: string): Promise<void> {

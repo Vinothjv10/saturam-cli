@@ -22,6 +22,17 @@ const INPUTS = [
             "Override the project name used for output folders (e.g. onboarding/confluence/<project-name>/...) for every document fetched in this run",
         schema: z.string().optional(),
     },
+    {
+        name: "upload-to-s3",
+        description:
+            "Upload the documents synced in this run to the configured S3 bucket (requires AWS S3 to be configured via 'sat-cli init' → Cloud)",
+        schema: z.boolean().optional(),
+    },
+    {
+        name: "list",
+        description: "List locally synced onboarding documents, grouped by project name, instead of syncing",
+        schema: z.boolean().optional(),
+    },
 ] as const;
 
 @Service()
@@ -39,9 +50,15 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     ) {}
 
     public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
+        if (inputs.list) {
+            await this.onboardService.listSyncedDocuments();
+            return;
+        }
+
         const cwd = process.env.SATENG_ORIGINAL_CWD ?? process.cwd();
         const arg = inputs.configOrSheet;
         const projectNameOverride = inputs["project-name"];
+        const uploadToS3 = inputs["upload-to-s3"];
 
         const isGoogleSheet = arg && (arg.includes("docs.google.com/spreadsheets") || /^[a-zA-Z0-9-_]{44}$/.test(arg));
 
@@ -54,7 +71,8 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             const parsedConfig = {
                 onboardingSheets: [{ spreadsheetId }],
             };
-            await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
+            const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
+            if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
             return;
         }
 
@@ -62,6 +80,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
         logger.info(`Loading onboarding configuration from: ${configPath}`);
         const parsedConfig = await this.configService.loadOnboardingConfig(configPath);
-        await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
+        const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
+        if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
     }
 }

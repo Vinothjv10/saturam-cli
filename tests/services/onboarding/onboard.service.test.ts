@@ -3,16 +3,19 @@ import { ConfluenceService } from "../../../src/integrations/confluence/services
 import { JiraService } from "../../../src/integrations/jira/services/jira.service";
 import { GoogleDriveService } from "../../../src/integrations/google-drive/services/google-drive.service";
 import { ConfigService } from "../../../src/services/config-service";
+import { S3Service } from "../../../src/integrations/aws/services/s3.service";
 import { JiraKnowledgeSource } from "../../../src/services/knowledge/jira-knowledge.source";
 import { ConfluenceKnowledgeSource } from "../../../src/services/knowledge/confluence-knowledge.source";
 import { GoogleDriveKnowledgeSource } from "../../../src/services/knowledge/google-drive-knowledge.source";
 import { KnowledgeDocument, KnowledgeSourceType } from "../../../src/services/knowledge/knowledge-source.model";
 import { GoogleSheetsKnowledgeSource } from "../../../src/services/knowledge/google-sheets-knowledge.source";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "fs/promises";
 
 jest.mock("fs/promises", () => ({
     mkdir: jest.fn().mockResolvedValue(undefined),
     writeFile: jest.fn().mockResolvedValue(undefined),
+    readdir: jest.fn().mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
+    readFile: jest.fn().mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" })),
 }));
 
 // Helpers to build minimal KnowledgeDocuments in tests
@@ -36,6 +39,7 @@ describe("OnboardService", () => {
     let mockConfluenceSource: jest.Mocked<ConfluenceKnowledgeSource>;
     let mockGoogleDriveSource: jest.Mocked<GoogleDriveKnowledgeSource>;
     let mockGoogleSheetsSource: jest.Mocked<GoogleSheetsKnowledgeSource>;
+    let mockS3: jest.Mocked<S3Service>;
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -94,6 +98,14 @@ describe("OnboardService", () => {
             })),
         } as any;
 
+        mockS3 = {
+            getObject: jest.fn(),
+            putObject: jest.fn().mockResolvedValue(undefined),
+            listObjects: jest.fn().mockResolvedValue([]),
+            objectExists: jest.fn().mockResolvedValue(false),
+            ensurePrefixExists: jest.fn().mockResolvedValue(undefined),
+        } as any;
+
         service = new OnboardService(
             mockConfluence,
             mockJira,
@@ -103,6 +115,7 @@ describe("OnboardService", () => {
             mockGoogleDriveSource,
             mockGoogleSheetsSource,
             mockConfig,
+            mockS3,
         );
     });
 
@@ -129,9 +142,7 @@ describe("OnboardService", () => {
 
             await service.sync(config, "/mock/cwd", "Custom Project");
 
-            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) =>
-                String(call[0]).endsWith(".md"),
-            );
+            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) => String(call[0]).endsWith(".md"));
             expect(writeCall[0]).toContain("/custom-project/");
             expect(writeCall[0]).not.toContain("/myproject/");
         });
@@ -154,9 +165,7 @@ describe("OnboardService", () => {
 
             await service.sync(config, "/mock/cwd");
 
-            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) =>
-                String(call[0]).endsWith(".md"),
-            );
+            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) => String(call[0]).endsWith(".md"));
             expect(writeCall[0]).toContain("/myproject/");
         });
     });
@@ -492,6 +501,94 @@ describe("OnboardService", () => {
 
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
+        });
+    });
+
+    describe("uploadToS3", () => {
+        const files = [
+            "/mock/personal/onboarding/google-docs/saturam/doc.md",
+            "/mock/personal/onboarding/google-docs/saturam/doc.json",
+        ];
+
+        it("does nothing and warns when there are no files to upload", async () => {
+            const result = await service.uploadToS3([]);
+
+            expect(result).toEqual({ uploaded: 0, skipped: 0, failed: 0 });
+            expect(mockS3.putObject).not.toHaveBeenCalled();
+        });
+
+        it("ensures the folder prefix exists once per folder, then uploads new files", async () => {
+            (mockS3.objectExists as jest.Mock).mockResolvedValue(false);
+            (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
+
+            const result = await service.uploadToS3(files);
+
+            expect(result).toEqual({ uploaded: 2, skipped: 0, failed: 0 });
+            expect(mockS3.ensurePrefixExists).toHaveBeenCalledTimes(1);
+            expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("google-docs/saturam");
+            expect(mockS3.putObject).toHaveBeenCalledWith(
+                "google-docs/saturam/doc.md",
+                expect.any(Buffer),
+                "text/markdown",
+            );
+            expect(mockS3.putObject).toHaveBeenCalledWith(
+                "google-docs/saturam/doc.json",
+                expect.any(Buffer),
+                "application/json",
+            );
+        });
+
+        it("skips files that already exist in S3", async () => {
+            (mockS3.objectExists as jest.Mock).mockResolvedValue(true);
+
+            const result = await service.uploadToS3(files);
+
+            expect(result).toEqual({ uploaded: 0, skipped: 2, failed: 0 });
+            expect(mockS3.putObject).not.toHaveBeenCalled();
+        });
+
+        it("counts a file as failed if the upload throws, without stopping the rest", async () => {
+            (mockS3.objectExists as jest.Mock).mockResolvedValue(false);
+            (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
+            (mockS3.putObject as jest.Mock)
+                .mockRejectedValueOnce(new Error("Access Denied"))
+                .mockResolvedValueOnce(undefined);
+
+            const result = await service.uploadToS3(files);
+
+            expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 1 });
+        });
+    });
+
+    describe("listSyncedDocuments", () => {
+        it("reports no documents when the onboarding directory is empty", async () => {
+            (readdir as jest.Mock).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+
+            await service.listSyncedDocuments();
+
+            // No throw — nothing more to assert since output only goes to the logger
+        });
+
+        it("groups documents by project name and category", async () => {
+            (readdir as jest.Mock).mockImplementation(async (dirPath: string) => {
+                if (dirPath === "/mock/personal/onboarding/google-docs") {
+                    return [{ name: "saturam", isDirectory: () => true, isFile: () => false }];
+                }
+                if (dirPath === "/mock/personal/onboarding/google-docs/saturam") {
+                    return [{ name: "golden-record.md", isDirectory: () => false, isFile: () => true }];
+                }
+                throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+            });
+            (readFile as jest.Mock).mockImplementation(async (filePath: string) => {
+                if (filePath.endsWith(".json")) {
+                    return JSON.stringify({ title: "Golden Record Management Talking Points" });
+                }
+                throw new Error("unexpected read");
+            });
+
+            await service.listSyncedDocuments();
+
+            expect(readdir).toHaveBeenCalledWith("/mock/personal/onboarding/google-docs", { withFileTypes: true });
         });
     });
 });

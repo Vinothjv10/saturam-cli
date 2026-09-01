@@ -8,6 +8,7 @@ jest.mock("@aws-sdk/client-s3", () => ({
     GetObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
     PutObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
     ListObjectsV2Command: jest.fn().mockImplementation((input) => ({ input })),
+    HeadObjectCommand: jest.fn().mockImplementation((input) => ({ input })),
 }));
 
 describe("S3Service", () => {
@@ -69,5 +70,60 @@ describe("S3Service", () => {
         await expect(service.getObject("file.md")).rejects.toThrow(
             "Failed to get s3://my-bucket/docs/file.md: Access Denied",
         );
+    });
+
+    describe("objectExists", () => {
+        it("returns true when HeadObjectCommand succeeds", async () => {
+            mockSend.mockResolvedValueOnce({});
+
+            const exists = await service.objectExists("file.md");
+
+            expect(exists).toBe(true);
+            expect(mockSend).toHaveBeenCalledWith(
+                expect.objectContaining({ input: { Bucket: "my-bucket", Key: "docs/file.md" } }),
+            );
+        });
+
+        it("returns false when the object is not found (404)", async () => {
+            const notFoundError = Object.assign(new Error("Not Found"), {
+                name: "NotFound",
+                $metadata: { httpStatusCode: 404 },
+            });
+            mockSend.mockRejectedValueOnce(notFoundError);
+
+            const exists = await service.objectExists("missing.md");
+
+            expect(exists).toBe(false);
+        });
+
+        it("re-throws non-404 errors", async () => {
+            mockSend.mockRejectedValueOnce(new Error("Access Denied"));
+
+            await expect(service.objectExists("file.md")).rejects.toThrow(
+                "Failed to check s3://my-bucket/docs/file.md: Access Denied",
+            );
+        });
+    });
+
+    describe("ensurePrefixExists", () => {
+        it("does nothing if the folder prefix already has objects", async () => {
+            mockSend.mockResolvedValueOnce({ Contents: [{ Key: "docs/saturam/" }], IsTruncated: false });
+
+            await service.ensurePrefixExists("saturam");
+
+            // Only the list call, no put
+            expect(mockSend).toHaveBeenCalledTimes(1);
+        });
+
+        it("creates a zero-byte marker object when the folder prefix is empty", async () => {
+            mockSend.mockResolvedValueOnce({ Contents: [], IsTruncated: false }).mockResolvedValueOnce({});
+
+            await service.ensurePrefixExists("saturam");
+
+            expect(mockSend).toHaveBeenCalledTimes(2);
+            expect(mockSend).toHaveBeenLastCalledWith(
+                expect.objectContaining({ input: { Bucket: "my-bucket", Key: "docs/saturam/", Body: "" } }),
+            );
+        });
     });
 });

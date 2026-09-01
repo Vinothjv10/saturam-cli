@@ -187,6 +187,30 @@ sat-cli onboard <spreadsheet_url_or_id> --project-name "Saturam Core"
 
 This affects every task type in the run (Confluence, Jira, Google Docs, Google Sheets, and sheet-resolved links) — e.g. `onboarding/confluence/saturam-core/...` instead of each task's own derived name.
 
+#### Uploading to S3
+
+Pass `--upload-to-s3` to upload every file written during the run to the configured S3 bucket (see [Cloud (AWS S3 & Bedrock Knowledge Base)](README.md#cloud-aws-s3--bedrock-knowledge-base) in the README for how to configure S3 via `sat-cli init`):
+
+```bash
+sat-cli onboard --project-name "Saturam Core" --upload-to-s3
+```
+
+For each file, this:
+
+1. Ensures the destination "folder" prefix exists in the bucket (creates it if not — S3 has no real folders, so this is a marker object under that prefix).
+2. Checks whether the object already exists at that key in S3.
+3. Uploads it only if it doesn't already exist — existing objects are left untouched and reported as skipped.
+
+Local files always mirror their path under `~/.config/sateng/onboarding/` as the S3 key (e.g. `google-docs/saturam-core/golden-record.md`), optionally under the bucket's configured prefix.
+
+#### Listing Synced Documents
+
+`--list` reads what's already synced locally (no network calls) and prints it grouped by project name and source category:
+
+```bash
+sat-cli onboard --list
+```
+
 ---
 
 ## 5. Troubleshooting & Expiration Notes

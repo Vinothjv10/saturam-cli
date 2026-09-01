@@ -101,6 +101,13 @@ sat-cli onboard <spreadsheet-url-or-id>
 # (e.g. onboarding/confluence/<project-name>/... instead of each config/tab-derived name)
 sat-cli onboard --project-name "Saturam Core"
 sat-cli onboard <spreadsheet-url-or-id> --project-name "Saturam Core"
+
+# Upload the documents synced in this run to the configured S3 bucket
+# (requires AWS S3 to be configured — see "Cloud" below)
+sat-cli onboard --project-name "Saturam Core" --upload-to-s3
+
+# List locally synced documents, grouped by project name, without syncing
+sat-cli onboard --list
 ```
 
 For more details on onboarding sync configuration and features, see [ONBOARDING.md](ONBOARDING.md).

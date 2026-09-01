@@ -1,6 +1,6 @@
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "fs/promises";
 import { getLogger } from "log4js";
-import { dirname, extname, join, resolve } from "path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "path";
 import pLimit from "p-limit";
 import { Service } from "typedi";
 import { z } from "zod";
@@ -11,6 +11,7 @@ import { parseJiraUrl } from "../../integrations/jira/utils/jira-url.util";
 import { parseGoogleDocUrl, parseGoogleSheetUrl } from "../../integrations/google-drive/utils/google-drive-url.util";
 import { ConfigService } from "../config-service";
 import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
+import { S3Service } from "../../integrations/aws/services/s3.service";
 import { JiraKnowledgeSource } from "../knowledge/jira-knowledge.source";
 import { ConfluenceKnowledgeSource } from "../knowledge/confluence-knowledge.source";
 import { GoogleDriveKnowledgeSource } from "../knowledge/google-drive-knowledge.source";
@@ -88,13 +89,21 @@ export class OnboardService {
         private readonly googleDriveSource: GoogleDriveKnowledgeSource,
         private readonly googleSheetsSource: GoogleSheetsKnowledgeSource,
         private readonly config: ConfigService,
+        private readonly s3: S3Service,
     ) {}
 
     /** When set, overrides every task's project name for the duration of a sync() call. */
     private projectNameOverride?: string;
+    /** Absolute paths of every file written during the current sync() call. */
+    private syncedFiles: string[] = [];
 
-    public async sync(config: OnboardConfig, cwd: string, projectNameOverride?: string): Promise<void> {
+    public async sync(
+        config: OnboardConfig,
+        cwd: string,
+        projectNameOverride?: string,
+    ): Promise<{ filesWritten: string[] }> {
         this.projectNameOverride = projectNameOverride;
+        this.syncedFiles = [];
 
         // Resolve onboarding sheets links
         const globalSheetConfigs = config.onboardingSheets || [];
@@ -363,6 +372,8 @@ export class OnboardService {
         if (confluenceTasks.length === 0 && jiraTasks.length === 0 && googleTasks.length === 0 && sheetsCount === 0) {
             logger.warn("No Confluence pages, Jira tickets, Google Documents, or Google Sheets configured to fetch.");
         }
+
+        return { filesWritten: [...this.syncedFiles] };
     }
 
     // --- Generic task executor (replaces executeConfluenceTasks / executeJiraTasks / executeGoogleDocsTasks) ---
@@ -479,6 +490,7 @@ export class OnboardService {
 
             await mkdir(outputDir, { recursive: true });
             await writeFile(jsonPath, JSON.stringify(sidecar, null, 4), "utf8");
+            this.syncedFiles.push(jsonPath);
 
             logger.info(
                 `✓ Saved Google Sheet "${spreadsheetTitle}" index (${allRows.length - 1} data row(s)) to: ${jsonPath}`,
@@ -504,6 +516,149 @@ export class OnboardService {
         await mkdir(dirname(absoluteOutputPath), { recursive: true });
         await writeFile(absoluteOutputPath, doc.content, "utf8");
         await writeFile(absoluteJsonPath, JSON.stringify(metadataOnly, null, 4), "utf8");
+        this.syncedFiles.push(absoluteOutputPath, absoluteJsonPath);
+    }
+
+    // --- S3 upload ---
+
+    private static readonly ONBOARD_SUBDIRS = ["confluence", "jira", "google-docs", "google-sheets"] as const;
+
+    /**
+     * Uploads the given local files (absolute paths, e.g. from sync()'s filesWritten) to the
+     * configured S3 bucket, mirroring their path relative to the local onboarding directory.
+     * For each file: ensures the destination "folder" prefix exists, skips upload if the object
+     * is already present in S3, otherwise uploads it.
+     */
+    public async uploadToS3(filePaths: string[]): Promise<{ uploaded: number; skipped: number; failed: number }> {
+        if (filePaths.length === 0) {
+            logger.warn("No files were synced in this run — nothing to upload to S3.");
+            return { uploaded: 0, skipped: 0, failed: 0 };
+        }
+
+        const baseOnboardDir = this.resolveBaseOnboardDir();
+        const ensuredPrefixes = new Set<string>();
+        let uploaded = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        for (const filePath of filePaths) {
+            const key = relative(baseOnboardDir, filePath).split(sep).join("/");
+            try {
+                const folderPrefix = dirname(key);
+                if (folderPrefix && folderPrefix !== "." && !ensuredPrefixes.has(folderPrefix)) {
+                    await this.s3.ensurePrefixExists(folderPrefix);
+                    ensuredPrefixes.add(folderPrefix);
+                }
+
+                const alreadyExists = await this.s3.objectExists(key);
+                if (alreadyExists) {
+                    logger.info(`  s3: ${key} already exists — skipping`);
+                    skipped++;
+                    continue;
+                }
+
+                const body = await readFile(filePath);
+                const contentType = key.endsWith(".json") ? "application/json" : "text/markdown";
+                await this.s3.putObject(key, body, contentType);
+                logger.info(`  s3: uploaded ${key}`);
+                uploaded++;
+            } catch (err) {
+                logger.error(`  s3: failed to upload ${key}: ${(err as Error).message}`);
+                failed++;
+            }
+        }
+
+        logger.info(`\nS3 upload completed: ${uploaded} uploaded, ${skipped} already present, ${failed} failed.`);
+        return { uploaded, skipped, failed };
+    }
+
+    // --- Local listing ---
+
+    /**
+     * Lists locally synced onboarding documents, grouped by project name and source category.
+     */
+    public async listSyncedDocuments(): Promise<void> {
+        const baseOnboardDir = this.resolveBaseOnboardDir();
+        const grouped: Record<string, Record<string, string[]>> = {};
+
+        for (const subdir of OnboardService.ONBOARD_SUBDIRS) {
+            const subdirPath = join(baseOnboardDir, subdir);
+            let entries: import("fs").Dirent[];
+            try {
+                entries = await readdir(subdirPath, { withFileTypes: true });
+            } catch {
+                continue;
+            }
+
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    const projectName = entry.name;
+                    const docs = await this.describeDocsInDir(join(subdirPath, projectName), subdir);
+                    if (docs.length > 0) {
+                        (grouped[projectName] ??= {})[subdir] = docs;
+                    }
+                } else if (entry.isFile() && this.isDocFile(entry.name, subdir)) {
+                    const doc = await this.describeDoc(join(subdirPath, entry.name), subdir);
+                    if (doc) {
+                        (grouped["(no project)"] ??= {})[subdir] ??= [];
+                        grouped["(no project)"][subdir].push(doc);
+                    }
+                }
+            }
+        }
+
+        const projectNames = Object.keys(grouped).sort();
+        if (projectNames.length === 0) {
+            logger.info(`No onboarding documents found locally under: ${baseOnboardDir}`);
+            logger.info("Run 'sat-cli onboard' first.");
+            return;
+        }
+
+        for (const projectName of projectNames) {
+            logger.info(`\n${projectName}`);
+            for (const [category, docs] of Object.entries(grouped[projectName])) {
+                logger.info(`  ${category} (${docs.length}):`);
+                for (const doc of docs) {
+                    logger.info(`    - ${doc}`);
+                }
+            }
+        }
+    }
+
+    private isDocFile(fileName: string, subdir: string): boolean {
+        if (subdir === "google-sheets") return fileName.endsWith(".json");
+        return fileName.endsWith(".md");
+    }
+
+    private async describeDocsInDir(dirPath: string, subdir: string): Promise<string[]> {
+        let entries: import("fs").Dirent[];
+        try {
+            entries = await readdir(dirPath, { withFileTypes: true });
+        } catch {
+            return [];
+        }
+
+        const docs: string[] = [];
+        for (const entry of entries) {
+            if (!entry.isFile() || !this.isDocFile(entry.name, subdir)) continue;
+            const doc = await this.describeDoc(join(dirPath, entry.name), subdir);
+            if (doc) docs.push(doc);
+        }
+        return docs;
+    }
+
+    private async describeDoc(filePath: string, subdir: string): Promise<string | undefined> {
+        try {
+            if (subdir === "google-sheets") {
+                const raw = JSON.parse(await readFile(filePath, "utf8"));
+                return `${raw.title ?? basename(filePath)} (${raw.rowCount ?? "?"} rows)`;
+            }
+            const jsonPath = filePath.replace(/\.md$/, ".json");
+            const raw = JSON.parse(await readFile(jsonPath, "utf8"));
+            return raw.title ?? basename(filePath);
+        } catch {
+            return basename(filePath);
+        }
     }
 
     // --- Logging helper ---

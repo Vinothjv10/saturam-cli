@@ -10,7 +10,9 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     beforeEach(() => {
         jest.clearAllMocks();
         mockOnboardService = {
-            sync: jest.fn().mockResolvedValue(undefined),
+            sync: jest.fn().mockResolvedValue({ filesWritten: [] }),
+            uploadToS3: jest.fn().mockResolvedValue({ uploaded: 0, skipped: 0, failed: 0 }),
+            listSyncedDocuments: jest.fn().mockResolvedValue(undefined),
         } as any;
 
         mockConfigService = {
@@ -26,6 +28,8 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         await command.execute({
             configOrSheet: "https://docs.google.com/spreadsheets/d/1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg/edit",
             "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -41,6 +45,8 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         await command.execute({
             configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
             "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -53,7 +59,12 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     });
 
     it("should default to local config mode when no argument is passed", async () => {
-        await command.execute({ configOrSheet: undefined, "project-name": undefined });
+        await command.execute({
+            configOrSheet: undefined,
+            "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: undefined,
+        });
 
         expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(
             expect.stringContaining(".sateng/onboarding.json"),
@@ -68,7 +79,12 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     });
 
     it("should pass the --project-name override through to OnboardService.sync in config mode", async () => {
-        await command.execute({ configOrSheet: undefined, "project-name": "custom-project" });
+        await command.execute({
+            configOrSheet: undefined,
+            "project-name": "custom-project",
+            "upload-to-s3": undefined,
+            list: undefined,
+        });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
             {
@@ -83,6 +99,8 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         await command.execute({
             configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
             "project-name": "custom-project",
+            "upload-to-s3": undefined,
+            list: undefined,
         });
 
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
@@ -92,5 +110,44 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect.any(String),
             "custom-project",
         );
+    });
+
+    it("should call uploadToS3 with the files written when --upload-to-s3 is passed", async () => {
+        (mockOnboardService.sync as jest.Mock).mockResolvedValue({
+            filesWritten: ["/mock/onboarding/google-docs/saturam/doc.md"],
+        });
+
+        await command.execute({
+            configOrSheet: undefined,
+            "project-name": "Saturam",
+            "upload-to-s3": true,
+            list: undefined,
+        });
+
+        expect(mockOnboardService.uploadToS3).toHaveBeenCalledWith(["/mock/onboarding/google-docs/saturam/doc.md"]);
+    });
+
+    it("should not call uploadToS3 when --upload-to-s3 is not passed", async () => {
+        await command.execute({
+            configOrSheet: undefined,
+            "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: undefined,
+        });
+
+        expect(mockOnboardService.uploadToS3).not.toHaveBeenCalled();
+    });
+
+    it("should route to listSyncedDocuments and skip syncing when --list is passed", async () => {
+        await command.execute({
+            configOrSheet: undefined,
+            "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: true,
+        });
+
+        expect(mockOnboardService.listSyncedDocuments).toHaveBeenCalledTimes(1);
+        expect(mockOnboardService.sync).not.toHaveBeenCalled();
+        expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
     });
 });
