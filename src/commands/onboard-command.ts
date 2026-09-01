@@ -1,5 +1,6 @@
 import { input } from "@inquirer/prompts";
 import { getLogger } from "log4js";
+import { Marked } from "marked";
 import { resolve } from "path";
 import { Service } from "typedi";
 import { z } from "zod";
@@ -11,6 +12,13 @@ import { OnboardService } from "../services/onboarding/onboard.service";
 import { TypedCommand, TypedInputs } from "./base";
 
 const logger = getLogger("OnboardCommand");
+const { markedTerminal } = require("marked-terminal");
+const terminalMarkdown = new Marked(
+    markedTerminal({
+        width: process.stdout.columns || 100,
+        reflowText: false,
+    }),
+);
 
 const INPUTS = [
     {
@@ -122,7 +130,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     private async promptQuestion(): Promise<string | null> {
         let question: string;
         try {
-            question = await input({ message: "Question:" });
+            question = await input({
+                message: "Ask Saturam-Cli :",
+                theme: { prefix: { idle: "🤖", done: "🤖" } },
+            });
         } catch (err) {
             if (err instanceof Error && err.name === "ExitPromptError") {
                 return null;
@@ -200,10 +211,31 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         }
     }
 
+    private stripInlineCitations(answer: string): string {
+        return answer.replace(/\s*\[(?:\d+(?:\s*,\s*\d+)*)\]/g, "");
+    }
+
+    private renderAnswer(answer: string): string {
+        const cleaned = this.stripInlineCitations(answer).trim();
+        if (!process.stdout.isTTY) {
+            return cleaned;
+        }
+        return String(terminalMarkdown.parse(cleaned)).trimEnd();
+    }
+
+    private printSources(chunks: Array<{ location?: string }>): void {
+        const sources = Array.from(new Set(chunks.map((chunk) => chunk.location).filter(Boolean)));
+        if (sources.length === 0) return;
+
+        logger.info("Sources:");
+        sources.forEach((source) => logger.info(`- ${source}`));
+        logger.info("");
+    }
+
     /**
      * Interactive RAG chat REPL: for each question, retrieves context from the Bedrock
      * Knowledge Base and sends it plus the question to the configured LLM, printing the
-     * generated answer (with source citations). Requires an LLM provider to be configured
+     * generated answer with sources. Requires an LLM provider to be configured
      * first — checked once up front with a clear suggestion if none is found.
      */
     private async runChatSearch(): Promise<void> {
@@ -235,14 +267,8 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                     return { chunks, answer };
                 });
 
-                logger.info(`\n${answer.trim()}\n`);
-                if (chunks.length > 0) {
-                    logger.info("Sources:");
-                    chunks.forEach((chunk, index) => {
-                        logger.info(`  [${index + 1}] ${chunk.location ?? "(no location)"}`);
-                    });
-                    logger.info("");
-                }
+                logger.info(`\n${this.renderAnswer(answer)}\n`);
+                this.printSources(chunks);
             } catch (err) {
                 logger.error(`Chat failed: ${(err as Error).message}\n`);
             }

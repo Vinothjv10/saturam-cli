@@ -3,7 +3,8 @@ import { RetrievedChunk } from "../integrations/aws/services/bedrock-knowledge-b
 
 /**
  * Builds the RAG prompt for `sat-cli onboard --chat`: instructs the LLM to answer strictly
- * from the retrieved Bedrock Knowledge Base chunks, citing sources by index.
+ * from the retrieved Bedrock Knowledge Base chunks. Source URLs are printed by the CLI,
+ * so the generated answer should not include inline citation markers.
  */
 export function getKnowledgeBaseChatMessages(params: { question: string; chunks: RetrievedChunk[] }): {
     system: SystemMessage;
@@ -15,14 +16,15 @@ export function getKnowledgeBaseChatMessages(params: { question: string; chunks:
 Rules:
 - Answer using only the given context. If the context doesn't contain enough information to answer, say so plainly instead of guessing.
 - Be concise and direct.
-- When you use a piece of context, cite it by its number in brackets, e.g. "[1]".`,
+- Use Markdown formatting when it improves readability.
+- Do not include inline citation markers like "[1]" in the answer.`,
     );
 
     const context = params.chunks.length
         ? params.chunks
               .map((chunk, index) => {
                   const source = chunk.location ? ` (source: ${chunk.location})` : "";
-                  return `[${index + 1}]${source}\n${chunk.content.trim()}`;
+                  return `Context ${index + 1}${source}\n${chunk.content.trim()}`;
               })
               .join("\n\n---\n\n")
         : "(No relevant context was found in the knowledge base for this question.)";

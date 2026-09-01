@@ -205,6 +205,12 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(mockOnboardService.sync).not.toHaveBeenCalled();
             expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
             expect(input).toHaveBeenCalledTimes(1);
+            expect(input).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    message: "Ask Saturam-Cli :",
+                    theme: { prefix: { idle: "🤖", done: "🤖" } },
+                }),
+            );
         });
 
         it("exits immediately on blank input", async () => {
@@ -320,13 +326,20 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         });
 
         it("retrieves context, sends it plus the question to the LLM, and prints the answer", async () => {
+            const stdoutIsTTY = process.stdout.isTTY;
+            Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
             (input as jest.Mock).mockResolvedValueOnce("what is the auth flow?").mockResolvedValueOnce("");
             (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
                 { content: "auth uses OAuth2", score: 0.95, location: "s3://bucket/auth.md" },
+                { content: "more auth context", score: 0.92, location: "s3://bucket/auth.md" },
             ]);
             (mockLlmService.prompt as jest.Mock).mockResolvedValueOnce("The auth flow uses OAuth2. [1]");
 
-            await command.execute(chatInputs);
+            try {
+                await command.execute(chatInputs);
+            } finally {
+                Object.defineProperty(process.stdout, "isTTY", { value: stdoutIsTTY, configurable: true });
+            }
 
             expect(mockKnowledgeBase.retrieve).toHaveBeenCalledWith("what is the auth flow?");
             expect(mockLlmService.prompt).toHaveBeenCalledTimes(1);
@@ -334,6 +347,9 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(messages).toHaveLength(2);
             expect(String(messages[1].content)).toContain("auth uses OAuth2");
             expect(String(messages[1].content)).toContain("what is the auth flow?");
+            expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe(
+                "The auth flow uses OAuth2.",
+            );
         });
 
         it("shows a terminal loading spinner while waiting for the chat answer", async () => {

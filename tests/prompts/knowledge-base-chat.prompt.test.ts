@@ -1,7 +1,7 @@
 import { getKnowledgeBaseChatMessages } from "../../src/prompts/knowledge-base-chat.prompt";
 
 describe("getKnowledgeBaseChatMessages", () => {
-    it("includes numbered, cited chunks with their source location in the user message", () => {
+    it("includes labeled chunks with their source location in the user message", () => {
         const { system, user } = getKnowledgeBaseChatMessages({
             question: "what is the auth flow?",
             chunks: [
@@ -11,10 +11,11 @@ describe("getKnowledgeBaseChatMessages", () => {
         });
 
         expect(String(system.content)).toContain("ONLY the context provided");
+        expect(String(system.content)).toContain('Do not include inline citation markers like "[1]"');
         const userText = String(user.content);
-        expect(userText).toContain("[1] (source: s3://bucket/auth.md)");
+        expect(userText).toContain("Context 1 (source: s3://bucket/auth.md)");
         expect(userText).toContain("Auth uses OAuth2.");
-        expect(userText).toContain("[2]\nTokens expire after 1 hour.");
+        expect(userText).toContain("Context 2\nTokens expire after 1 hour.");
         expect(userText).toContain("Question: what is the auth flow?");
     });
 
