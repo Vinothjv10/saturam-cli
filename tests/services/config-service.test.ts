@@ -1,4 +1,4 @@
-import { ConfigService, AIProvider } from "../../src/services/config-service";
+import { ConfigService, AIProvider, CloudProvider } from "../../src/services/config-service";
 import { WorkingDirectory } from "../../src/utils/working-directory";
 import { existsSync } from "fs";
 import { readFile } from "fs/promises";
@@ -135,6 +135,59 @@ describe("ConfigService Onboarding Credentials", () => {
 
         it("should throw if Atlassian credentials are missing", async () => {
             await expect(service.getGenericAtlassianCredentials()).rejects.toThrow("No Atlassian credentials found");
+        });
+    });
+
+    describe("getS3Config", () => {
+        it("should throw if AWS cloud is not configured", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({} as any);
+            await expect(service.getS3Config()).rejects.toThrow("AWS cloud is not configured");
+        });
+
+        it("should throw if S3 is not configured under AWS cloud", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: { [CloudProvider.AWS]: { enabled: true, awsRegion: "us-east-1" } },
+            } as any);
+            await expect(service.getS3Config()).rejects.toThrow("S3 is not configured");
+        });
+
+        it("should return bucket/prefix/region, falling back to awsRegion when s3.region is unset", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: {
+                    [CloudProvider.AWS]: {
+                        enabled: true,
+                        awsRegion: "eu-west-1",
+                        s3: { bucket: "my-bucket", prefix: "docs" },
+                    },
+                },
+            } as any);
+            const s3Config = await service.getS3Config();
+            expect(s3Config).toEqual({ bucket: "my-bucket", prefix: "docs", region: "eu-west-1" });
+        });
+    });
+
+    describe("getBedrockKnowledgeBaseConfig", () => {
+        it("should throw if Bedrock Knowledge Base is not configured", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: { [CloudProvider.AWS]: { enabled: true } },
+            } as any);
+            await expect(service.getBedrockKnowledgeBaseConfig()).rejects.toThrow(
+                "Bedrock Knowledge Base is not configured",
+            );
+        });
+
+        it("should return knowledgeBaseId/dataSourceId/region", async () => {
+            jest.spyOn(service, "loadPersonalConfig").mockResolvedValue({
+                cloud: {
+                    [CloudProvider.AWS]: {
+                        enabled: true,
+                        awsRegion: "us-east-1",
+                        bedrockKnowledgeBase: { knowledgeBaseId: "KB123", dataSourceId: "DS1" },
+                    },
+                },
+            } as any);
+            const kbConfig = await service.getBedrockKnowledgeBaseConfig();
+            expect(kbConfig).toEqual({ knowledgeBaseId: "KB123", dataSourceId: "DS1", region: "us-east-1" });
         });
     });
 

@@ -100,6 +100,27 @@ sat-cli onboard <spreadsheet-url-or-id>
 
 For more details on onboarding sync configuration and features, see [ONBOARDING.md](ONBOARDING.md).
 
+## Cloud (AWS S3 & Bedrock Knowledge Base)
+
+`sat-cli` can connect to cloud storage and retrieval services, independent of the AWS Bedrock **AI provider** described above (that one runs chat models; this one is for object storage and RAG-style document retrieval).
+
+Configure it interactively:
+
+```bash
+sat-cli init
+# → "Cloud (AWS / Azure / GCP)" → AWS
+```
+
+The wizard walks you through, printing instructions for each step:
+
+1. **AWS credentials** — either an existing `aws configure` CLI profile, or an IAM user's Access Key ID / Secret Access Key (create one at [IAM → Users → Security credentials → Create access key](https://console.aws.amazon.com/iam/home#/users)).
+2. **S3 bucket access** (optional) — bucket name, key prefix, and region. The IAM identity needs a policy granting `s3:GetObject`, `s3:PutObject`, and `s3:ListBucket` on the bucket.
+3. **Bedrock Knowledge Base retrieval** (optional) — the Knowledge Base ID (and optionally Data Source ID) from [Bedrock → Knowledge bases](https://console.aws.amazon.com/bedrock/home#/knowledge-bases). The IAM identity needs `bedrock:Retrieve` on the knowledge base.
+
+Azure and GCP are selectable in the same menu but not yet implemented.
+
+Equivalent environment variables (used as fallbacks by the underlying AWS SDK credential chain when no profile/keys are stored in config): `AWS_PROFILE`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`.
+
 ## Ollama
 
 `sat-cli` supports local Ollama and remote Ollama endpoints behind an API gateway.

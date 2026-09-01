@@ -4,6 +4,8 @@ import { Service } from "typedi";
 import { LLMModel } from "../constants/llm-models";
 import {
     AIProvider,
+    CloudProvider,
+    CloudProviderConfig,
     ConfigService,
     KEYLESS_PROVIDERS,
     PersonalConfiguration,
@@ -27,6 +29,12 @@ const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
     [AIProvider.DEEPSEEK]: "DeepSeek",
     [AIProvider.OLLAMA]: "Ollama (local models)",
     [AIProvider.SELF_HOSTED]: "Self Hosted LLM",
+};
+
+const CLOUD_PROVIDER_DISPLAY_NAMES: Record<CloudProvider, string> = {
+    [CloudProvider.AWS]: "AWS",
+    [CloudProvider.AZURE]: "Azure (coming soon)",
+    [CloudProvider.GCP]: "GCP (coming soon)",
 };
 
 const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
@@ -115,8 +123,14 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 { name: "SCM (GitHub / GitLab / Bitbucket)", value: "scm" },
                 { name: "Atlassian (Jira & Confluence)", value: "atlassian" },
                 { name: "Google (Drive / Docs / Sheets)", value: "google" },
+                { name: "Cloud (AWS / Azure / GCP)", value: "cloud" },
             ],
         });
+
+        if (setupType === "cloud") {
+            await this.configureCloudCredentials();
+            return;
+        }
 
         if (setupType === "atlassian") {
             await this.configureAtlassianCredentials();
@@ -154,11 +168,16 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                     { name: "Configure SCM platforms (GitHub/Bitbucket/GitLab)", value: "scm" },
                     { name: "Configure Atlassian (Jira & Confluence)", value: "atlassian" },
                     { name: "Configure Google (Drive / Docs / Sheets)", value: "google" },
+                    { name: "Configure Cloud (AWS / Azure / GCP)", value: "cloud" },
                     { name: "Exit", value: "exit" },
                 ],
             });
 
             if (action === "exit") return;
+            if (action === "cloud") {
+                await this.configureCloudCredentials();
+                return;
+            }
             if (action === "model") {
                 await this.selectDefaultModel(existing);
                 return;
@@ -240,6 +259,174 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         });
 
         logger.info(`\nGoogle credentials saved to: ${this.config.getPersonalConfigPath()}`);
+    }
+
+    private async configureCloudCredentials(): Promise<void> {
+        logger.info("\n--- Cloud (Storage & Retrieval) ---");
+        const existing = await this.config.loadPersonalConfig();
+
+        const provider = await select({
+            message: "Which cloud provider do you want to configure?",
+            choices: Object.values(CloudProvider).map((p) => ({
+                name: CLOUD_PROVIDER_DISPLAY_NAMES[p],
+                value: p,
+            })),
+        });
+
+        if (provider !== CloudProvider.AWS) {
+            logger.info(`\n${CLOUD_PROVIDER_DISPLAY_NAMES[provider]} is not supported yet — coming soon.`);
+            return;
+        }
+
+        const awsConfig = await this.configureAWSCloud(existing.cloud?.[CloudProvider.AWS]);
+        await this.config.savePersonalConfig({
+            ...existing,
+            cloud: { ...existing.cloud, [CloudProvider.AWS]: awsConfig },
+            defaultCloudProvider: CloudProvider.AWS,
+        });
+
+        logger.info(`\nAWS cloud configuration saved to: ${this.config.getPersonalConfigPath()}`);
+    }
+
+    private async configureAWSCloud(existing?: CloudProviderConfig): Promise<CloudProviderConfig> {
+        logger.info("\nAWS credentials — you need an IAM identity with programmatic access.");
+        logger.info("1. Go to: https://console.aws.amazon.com/iam/home#/users");
+        logger.info("2. Create (or pick) an IAM user, e.g. 'sat-cli-service'.");
+        logger.info(
+            "3. Open it → 'Security credentials' tab → 'Create access key' → choose 'Command Line Interface (CLI)'.",
+        );
+        logger.info("4. Copy the Access Key ID and Secret Access Key (the secret is shown only once).");
+        logger.info("   Alternative: if you already run 'aws configure', just point to that profile name instead.\n");
+
+        const authMethod = await select({
+            message: "How should sat-cli authenticate with AWS?",
+            choices: [
+                { name: "AWS CLI profile", value: "profile" as const },
+                { name: "Access key / secret key", value: "keys" as const },
+            ],
+            default: existing?.awsAuthMethod ?? "profile",
+        });
+
+        let awsProfile: string | undefined;
+        let awsAccessKeyId: string | undefined;
+        let awsSecretAccessKey: string | undefined;
+        let awsSessionToken: string | undefined;
+
+        if (authMethod === "profile") {
+            awsProfile = await input({
+                message: "AWS CLI profile name (leave empty for default credential chain):",
+                default: existing?.awsProfile ?? process.env.AWS_PROFILE ?? "",
+            });
+
+            if (awsProfile) {
+                try {
+                    const { execSync } = require("child_process");
+                    execSync(`aws sts get-caller-identity --profile ${awsProfile}`, { stdio: "pipe" });
+                    logger.info(`AWS profile '${awsProfile}' verified successfully.`);
+                } catch {
+                    logger.warn(`Warning: Could not verify AWS profile '${awsProfile}'. Make sure it's configured.`);
+                }
+            }
+        } else {
+            awsAccessKeyId = await input({
+                message: "AWS Access Key ID:",
+                default: existing?.awsAccessKeyId ?? "",
+            });
+            awsSecretAccessKey = await password({
+                message: `AWS Secret Access Key${existing?.awsSecretAccessKey ? " (press enter to keep existing)" : ""}:`,
+                mask: "*",
+            });
+            awsSecretAccessKey = awsSecretAccessKey || existing?.awsSecretAccessKey;
+            const sessionToken = await password({
+                message: "AWS Session Token (optional, for temporary credentials — press enter to skip):",
+                mask: "*",
+            });
+            awsSessionToken = sessionToken || existing?.awsSessionToken;
+        }
+
+        const awsRegion = await input({
+            message: "AWS region:",
+            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
+        });
+
+        let s3: CloudProviderConfig["s3"] = existing?.s3;
+        const configureS3 = await confirm({
+            message: "Configure S3 bucket access?",
+            default: !!existing?.s3,
+        });
+        if (configureS3) {
+            logger.info("\nS3 access:");
+            logger.info("1. Go to: https://console.aws.amazon.com/s3/");
+            logger.info("2. Create (or pick) a bucket, and note its name and region.");
+            logger.info("3. Attach an IAM policy to your user/role scoped to that bucket, e.g.:");
+            logger.info("   {");
+            logger.info('     "Effect": "Allow",');
+            logger.info('     "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],');
+            logger.info('     "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]');
+            logger.info("   }\n");
+
+            const bucket = await input({
+                message: "S3 bucket name:",
+                default: existing?.s3?.bucket ?? "",
+                validate: (val) => (val.trim() ? true : "Bucket name is required"),
+            });
+            const prefix = await input({
+                message: "Key prefix within the bucket (optional):",
+                default: existing?.s3?.prefix ?? "",
+            });
+            const s3Region = await input({
+                message: "Bucket region (leave empty to use the AWS region above):",
+                default: existing?.s3?.region ?? "",
+            });
+
+            s3 = { bucket, prefix: prefix.trim() || undefined, region: s3Region.trim() || undefined };
+        }
+
+        let bedrockKnowledgeBase: CloudProviderConfig["bedrockKnowledgeBase"] = existing?.bedrockKnowledgeBase;
+        const configureKB = await confirm({
+            message: "Configure Bedrock Knowledge Base retrieval?",
+            default: !!existing?.bedrockKnowledgeBase,
+        });
+        if (configureKB) {
+            logger.info("\nBedrock Knowledge Base access (used for retrieval against your indexed documents):");
+            logger.info("1. Go to: https://console.aws.amazon.com/bedrock/home#/knowledge-bases");
+            logger.info("2. Create (or pick) a knowledge base, and copy its 'Knowledge base ID' (e.g. ABCD1234EF).");
+            logger.info("3. Note the 'Data source ID' too if you plan to trigger ingestion syncs.");
+            logger.info("4. Grant your IAM user/role 'bedrock:Retrieve' on that knowledge base's ARN.");
+            logger.info("5. Confirm the knowledge base's underlying model access is enabled in this region.\n");
+
+            const knowledgeBaseId = await input({
+                message: "Bedrock Knowledge Base ID:",
+                default: existing?.bedrockKnowledgeBase?.knowledgeBaseId ?? "",
+                validate: (val) => (val.trim() ? true : "Knowledge Base ID is required"),
+            });
+            const dataSourceId = await input({
+                message: "Data source ID (optional):",
+                default: existing?.bedrockKnowledgeBase?.dataSourceId ?? "",
+            });
+            const kbRegion = await input({
+                message: "Knowledge base region (leave empty to use the AWS region above):",
+                default: existing?.bedrockKnowledgeBase?.region ?? "",
+            });
+
+            bedrockKnowledgeBase = {
+                knowledgeBaseId,
+                dataSourceId: dataSourceId.trim() || undefined,
+                region: kbRegion.trim() || undefined,
+            };
+        }
+
+        return {
+            enabled: true,
+            awsAuthMethod: authMethod,
+            awsProfile: awsProfile || undefined,
+            awsRegion,
+            awsAccessKeyId: awsAccessKeyId || undefined,
+            awsSecretAccessKey: awsSecretAccessKey || undefined,
+            awsSessionToken: awsSessionToken || undefined,
+            s3,
+            bedrockKnowledgeBase,
+        };
     }
 
     private async fullSetup(existing: PersonalConfiguration): Promise<PersonalConfiguration> {
@@ -856,6 +1043,24 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
             logger.info("  SCM platforms:");
             for (const p of scmPlatforms) {
                 logger.info(`    ${p}`);
+            }
+        }
+        // Cloud providers
+        const awsCloud = config.cloud?.[CloudProvider.AWS];
+        if (awsCloud) {
+            logger.info("  Cloud:");
+            const authDesc =
+                awsCloud.awsAuthMethod === "keys"
+                    ? `access keys${awsCloud.awsSecretAccessKey ? " (configured)" : ""}`
+                    : `profile=${awsCloud.awsProfile ?? "default chain"}`;
+            logger.info(`    AWS: ${authDesc}, region=${awsCloud.awsRegion ?? "us-east-1"}`);
+            if (awsCloud.s3) {
+                logger.info(
+                    `      S3 bucket: ${awsCloud.s3.bucket}${awsCloud.s3.prefix ? `/${awsCloud.s3.prefix}` : ""}`,
+                );
+            }
+            if (awsCloud.bedrockKnowledgeBase) {
+                logger.info(`      Bedrock Knowledge Base: ${awsCloud.bedrockKnowledgeBase.knowledgeBaseId}`);
             }
         }
     }

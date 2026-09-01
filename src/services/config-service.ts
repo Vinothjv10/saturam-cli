@@ -43,6 +43,43 @@ export const ProviderConfigSchema = z.object({
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
 
+// --- Cloud provider config (storage & retrieval, distinct from AI chat providers) ---
+
+export enum CloudProvider {
+    AWS = "aws",
+    AZURE = "azure",
+    GCP = "gcp",
+}
+
+export const CloudProviderConfigSchema = z.object({
+    enabled: z.boolean().default(true).describe("Whether this cloud provider is enabled"),
+    // AWS auth — field names intentionally match ProviderConfigSchema's awsProfile/awsRegion
+    awsAuthMethod: z.enum(["profile", "keys"]).optional().describe("AWS auth method: CLI profile or access keys"),
+    awsProfile: z.string().optional().describe("AWS CLI profile name"),
+    awsRegion: z.string().optional().describe("AWS region"),
+    awsAccessKeyId: z.string().optional().describe("AWS access key ID"),
+    awsSecretAccessKey: z.string().optional().describe("AWS secret access key"),
+    awsSessionToken: z.string().optional().describe("Optional AWS session token (temporary credentials)"),
+    s3: z
+        .object({
+            bucket: z.string().describe("S3 bucket name"),
+            prefix: z.string().optional().describe("Key prefix within the bucket"),
+            region: z.string().optional().describe("Bucket region (defaults to awsRegion)"),
+        })
+        .optional()
+        .describe("S3 bucket access configuration"),
+    bedrockKnowledgeBase: z
+        .object({
+            knowledgeBaseId: z.string().describe("Bedrock Knowledge Base ID"),
+            dataSourceId: z.string().optional().describe("Bedrock Knowledge Base data source ID"),
+            region: z.string().optional().describe("Knowledge base region (defaults to awsRegion)"),
+        })
+        .optional()
+        .describe("Bedrock Knowledge Base retrieval configuration"),
+});
+
+export type CloudProviderConfig = z.infer<typeof CloudProviderConfigSchema>;
+
 const migrateModelId = (val: unknown) => (typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val);
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
@@ -66,6 +103,11 @@ export const PersonalConfigurationSchema = z.object({
     atlassianEmail: z.string().optional().describe("Atlassian account email (Jira & Confluence)"),
     atlassianToken: z.string().optional().describe("Atlassian API token (Jira & Confluence)"),
     googleAccessToken: z.string().optional().describe("Google OAuth access token (Drive / Docs / Sheets)"),
+    cloud: z
+        .record(z.nativeEnum(CloudProvider), CloudProviderConfigSchema)
+        .optional()
+        .describe("Configured cloud providers (AWS/Azure/GCP) for storage & retrieval"),
+    defaultCloudProvider: z.nativeEnum(CloudProvider).optional().describe("Default cloud provider"),
 });
 
 export type PersonalConfiguration = z.infer<typeof PersonalConfigurationSchema>;
@@ -476,6 +518,53 @@ export class ConfigService {
         throw new Error(
             "No Google Access Token found. Set GOOGLE_ACCESS_TOKEN, or run 'sat-cli init' and select 'Google (Drive / Docs / Sheets)' to configure credentials.",
         );
+    }
+
+    // --- Cloud Provider Config (AWS/Azure/GCP: storage & retrieval) ---
+
+    public async getCloudConfig(provider: CloudProvider): Promise<CloudProviderConfig | undefined> {
+        const config = await this.loadPersonalConfig();
+        return config.cloud?.[provider];
+    }
+
+    public async getAWSCloudConfig(): Promise<CloudProviderConfig> {
+        const cloudConfig = await this.getCloudConfig(CloudProvider.AWS);
+        if (!cloudConfig) {
+            throw new Error("AWS cloud is not configured. Run 'sat-cli init' and select 'Cloud (AWS / Azure / GCP)'.");
+        }
+        return cloudConfig;
+    }
+
+    public async getS3Config(): Promise<{ bucket: string; prefix?: string; region: string }> {
+        const cloudConfig = await this.getAWSCloudConfig();
+        if (!cloudConfig.s3) {
+            throw new Error(
+                "S3 is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and configure S3 bucket access.",
+            );
+        }
+        return {
+            bucket: cloudConfig.s3.bucket,
+            prefix: cloudConfig.s3.prefix,
+            region: cloudConfig.s3.region ?? cloudConfig.awsRegion ?? "us-east-1",
+        };
+    }
+
+    public async getBedrockKnowledgeBaseConfig(): Promise<{
+        knowledgeBaseId: string;
+        dataSourceId?: string;
+        region: string;
+    }> {
+        const cloudConfig = await this.getAWSCloudConfig();
+        if (!cloudConfig.bedrockKnowledgeBase) {
+            throw new Error(
+                "Bedrock Knowledge Base is not configured. Run 'sat-cli init' → 'Cloud (AWS / Azure / GCP)' → AWS and configure Bedrock Knowledge Base retrieval.",
+            );
+        }
+        return {
+            knowledgeBaseId: cloudConfig.bedrockKnowledgeBase.knowledgeBaseId,
+            dataSourceId: cloudConfig.bedrockKnowledgeBase.dataSourceId,
+            region: cloudConfig.bedrockKnowledgeBase.region ?? cloudConfig.awsRegion ?? "us-east-1",
+        };
     }
 
     // --- Atlassian Credentials Helper ---

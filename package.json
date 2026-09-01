@@ -41,6 +41,8 @@
         "typescript": "5.9.3"
     },
     "dependencies": {
+        "@aws-sdk/client-bedrock-agent-runtime": "^3.687.0",
+        "@aws-sdk/client-s3": "^3.687.0",
         "@aws-sdk/credential-providers": "^3.687.0",
         "@inquirer/prompts": "^7.0.1",
         "@langchain/anthropic": "^0.3.22",
