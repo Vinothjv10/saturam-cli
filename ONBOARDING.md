@@ -202,10 +202,20 @@ For each content file, this:
 3. If not, uploads the content **plus a Bedrock Knowledge Base-compliant metadata sidecar** at `<key>.metadata.json` — e.g. alongside `saturam-core/google-docs/golden-record.md`, it writes `saturam-core/google-docs/golden-record.md.metadata.json` containing:
 
     ```json
-    { "metadataAttributes": { "title": "...", "source": "google-docs", "url": "...", "category": "google-docs", "project": "saturam-core", "updatedAt": "...", "author": "..." } }
+    {
+        "metadataAttributes": {
+            "title": "...",
+            "source": "google-docs",
+            "url": "...",
+            "category": "google-docs",
+            "project": "saturam-core",
+            "updatedAt": "...",
+            "author": "..."
+        }
+    }
     ```
 
-   Already-present content is left untouched and reported as skipped.
+    Already-present content is left untouched and reported as skipped.
 
 This naming — `<content-key>.metadata.json` in the same prefix as the content object — is the exact convention Amazon Bedrock Knowledge Bases uses to attach filterable metadata to a source document during ingestion. It is **not** the same as the local `<file>.json` bookkeeping sidecar written by `sat-cli onboard` (which stores full document metadata for `--list` and isn't uploaded to S3 under its own name) — uploading that bare `.json` next to the content would make Bedrock ingest it as its own separate document instead of recognizing it as metadata.
 
@@ -225,6 +235,7 @@ Use the AWS credentials and Bedrock Knowledge Base configured by `sat-cli init` 
 
 ```bash
 sat-cli onboard --knowledge-base
+sat-cli onboard --knowledge-base --project "Saturam"
 ```
 
 Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
@@ -235,14 +246,17 @@ Enter questions interactively to see ranked matching chunks with their relevance
 
 ```bash
 sat-cli onboard --chat
+sat-cli onboard --chat --project "Saturam"
 ```
+
+`--project` normalizes the supplied name in the same way as `--project-name` during upload (for example, `"Saturam Core"` becomes `saturam-core`) and applies an exact Bedrock metadata filter. Only chunks whose uploaded metadata has that project value are retrieved, and the selected project is also included in the LLM instructions.
 
 For each question, this:
 
 1. Checks that at least one AI/LLM provider is configured (`sat-cli init` → "AI / LLM providers"). If none is found, it prints a suggestion to configure one and stops — no failed API calls.
 2. Retrieves relevant chunks from the Bedrock Knowledge Base, exactly like `--knowledge-base`.
-3. Sends the retrieved chunks (as numbered, cited context) plus your question to the configured LLM.
-4. Prints the LLM's generated answer, followed by a "Sources" list mapping each citation number back to its source location.
+3. Sends the retrieved chunks plus your question to the configured LLM.
+4. Prints the LLM's generated answer, followed by a deduplicated "Sources" list.
 
 Same exit controls as `--knowledge-base`: blank input, `exit`, `quit`, `:q`, or Ctrl+C.
 

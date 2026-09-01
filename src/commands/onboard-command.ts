@@ -35,6 +35,12 @@ const INPUTS = [
         schema: z.string().optional(),
     },
     {
+        name: "project",
+        description:
+            'Limit --chat or --knowledge-base retrieval to documents indexed for this project (for example, --project "Saturam")',
+        schema: z.string().optional(),
+    },
+    {
         name: "upload-to-s3",
         description:
             "Upload the documents synced in this run to the configured S3 bucket (requires AWS S3 to be configured via 'sat-cli init' → Cloud)",
@@ -75,14 +81,14 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         private readonly llmService: LlmService,
     ) {}
 
-    public async execute(inputs: TypedInputs<typeof INPUTS>): Promise<void> {
+    public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
         if (inputs.chat) {
-            await this.runChatSearch();
+            await this.runChatSearch(inputs.project);
             return;
         }
 
         if (inputs["knowledge-base"]) {
-            await this.runKnowledgeBaseSearch();
+            await this.runKnowledgeBaseSearch(inputs.project);
             return;
         }
 
@@ -122,6 +128,16 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
     private static readonly KB_EXIT_COMMANDS = new Set(["exit", "quit", ":q"]);
     private static readonly LOADING_FRAMES = ["-", "\\", "|", "/"];
+
+    private normalizeProjectName(projectName?: string): string | undefined {
+        if (!projectName?.trim()) return undefined;
+        return (
+            projectName
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/(^-|-$)/g, "") || undefined
+        );
+    }
 
     /**
      * Prompts for one question. Returns the trimmed question, or null to signal the REPL
@@ -174,8 +190,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * Retrieve (no generation — equivalent to the AWS console's "Retrieve only" test mode),
      * and prints the ranked chunks. Exits on blank input, "exit"/"quit", or Ctrl+C.
      */
-    private async runKnowledgeBaseSearch(): Promise<void> {
+    private async runKnowledgeBaseSearch(projectName?: string): Promise<void> {
+        const project = this.normalizeProjectName(projectName);
         logger.info("Bedrock Knowledge Base search (Retrieve only — no answer generation).");
+        if (project) logger.info(`Project filter: ${project}`);
         logger.info("Type a question and press Enter. Type 'exit' or leave blank to quit.\n");
 
         for (;;) {
@@ -187,7 +205,9 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
             try {
                 const results = await this.withLoading("Retrieving matching knowledge base chunks", () =>
-                    this.knowledgeBase.retrieve(question),
+                    project
+                        ? this.knowledgeBase.retrieve(question, { project })
+                        : this.knowledgeBase.retrieve(question),
                 );
                 if (results.length === 0) {
                     logger.info("No matching results found.\n");
@@ -238,7 +258,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * generated answer with sources. Requires an LLM provider to be configured
      * first — checked once up front with a clear suggestion if none is found.
      */
-    private async runChatSearch(): Promise<void> {
+    private async runChatSearch(projectName?: string): Promise<void> {
         const hasLlm = await this.configService.hasAnyLLMProviderConfigured();
         if (!hasLlm) {
             logger.warn("No AI/LLM provider is configured yet.");
@@ -248,8 +268,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             return;
         }
 
+        const project = this.normalizeProjectName(projectName);
         logger.info("Knowledge Base chat (RAG) — ask a question; it's answered by your configured LLM,");
         logger.info("grounded in context retrieved from the Bedrock Knowledge Base.");
+        if (project) logger.info(`Project filter: ${project}`);
         logger.info("Type a question and press Enter. Type 'exit' or leave blank to quit.\n");
 
         for (;;) {
@@ -260,12 +282,17 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             }
 
             try {
-                const { chunks, answer } = await this.withLoading("Retrieving context and generating answer", async () => {
-                    const chunks = await this.knowledgeBase.retrieve(question);
-                    const { system, user } = getKnowledgeBaseChatMessages({ question, chunks });
-                    const answer = await this.llmService.prompt([system, user]);
-                    return { chunks, answer };
-                });
+                const { chunks, answer } = await this.withLoading(
+                    "Retrieving context and generating answer",
+                    async () => {
+                        const chunks = project
+                            ? await this.knowledgeBase.retrieve(question, { project })
+                            : await this.knowledgeBase.retrieve(question);
+                        const { system, user } = getKnowledgeBaseChatMessages({ question, chunks, project });
+                        const answer = await this.llmService.prompt([system, user]);
+                        return { chunks, answer };
+                    },
+                );
 
                 logger.info(`\n${this.renderAnswer(answer)}\n`);
                 this.printSources(chunks);

@@ -24,4 +24,16 @@ describe("getKnowledgeBaseChatMessages", () => {
 
         expect(String(user.content)).toContain("No relevant context was found");
     });
+
+    it("instructs the LLM to answer only for the selected project", () => {
+        const { system, user } = getKnowledgeBaseChatMessages({
+            question: "give me an overview",
+            chunks: [{ content: "Saturam project details." }],
+            project: "saturam",
+        });
+
+        expect(String(system.content)).toContain('selected project "saturam"');
+        expect(String(system.content)).toContain("ignore any context that appears unrelated");
+        expect(String(user.content)).toContain("Selected project: saturam");
+    });
 });

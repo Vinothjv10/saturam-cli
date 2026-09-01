@@ -114,13 +114,16 @@ sat-cli onboard --knowledge-base
 
 # Interactively chat: RAG-style Q&A using your configured LLM, grounded in Knowledge Base retrieval
 sat-cli onboard --chat
+
+# Limit retrieval and answers to one uploaded project
+sat-cli onboard --chat --project "Saturam"
 ```
 
 For more details on onboarding sync configuration and features, see [ONBOARDING.md](ONBOARDING.md).
 
 `--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
-`--chat` is the RAG version: each question is first sent through the same Knowledge Base retrieval as `--knowledge-base`, then the retrieved chunks plus your question are sent to your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) to produce a synthesized, cited answer instead of raw chunks. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
+`--chat` is the RAG version: each question is first sent through the same Knowledge Base retrieval as `--knowledge-base`, then the retrieved chunks plus your question are sent to your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) to produce a synthesized answer instead of raw chunks. Add `--project "Saturam"` to apply a Bedrock metadata filter (`project = saturam`) and restrict the answer to that project's indexed documents. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
 
 ## Cloud (AWS S3 & Bedrock Knowledge Base)
 

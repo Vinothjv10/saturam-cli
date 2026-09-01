@@ -6,10 +6,17 @@ import { RetrievedChunk } from "../integrations/aws/services/bedrock-knowledge-b
  * from the retrieved Bedrock Knowledge Base chunks. Source URLs are printed by the CLI,
  * so the generated answer should not include inline citation markers.
  */
-export function getKnowledgeBaseChatMessages(params: { question: string; chunks: RetrievedChunk[] }): {
+export function getKnowledgeBaseChatMessages(params: {
+    question: string;
+    chunks: RetrievedChunk[];
+    project?: string;
+}): {
     system: SystemMessage;
     user: HumanMessage;
 } {
+    const projectRule = params.project
+        ? `\n- The user selected project "${params.project}". Answer only about that project and ignore any context that appears unrelated to it.`
+        : "";
     const system = new SystemMessage(
         `You are a helpful assistant answering questions using ONLY the context provided below, which was retrieved from a knowledge base.
 
@@ -17,7 +24,7 @@ Rules:
 - Answer using only the given context. If the context doesn't contain enough information to answer, say so plainly instead of guessing.
 - Be concise and direct.
 - Use Markdown formatting when it improves readability.
-- Do not include inline citation markers like "[1]" in the answer.`,
+- Do not include inline citation markers like "[1]" in the answer.${projectRule}`,
     );
 
     const context = params.chunks.length
@@ -29,7 +36,8 @@ Rules:
               .join("\n\n---\n\n")
         : "(No relevant context was found in the knowledge base for this question.)";
 
-    const user = new HumanMessage(`Context:\n${context}\n\nQuestion: ${params.question}`);
+    const projectContext = params.project ? `Selected project: ${params.project}\n\n` : "";
+    const user = new HumanMessage(`${projectContext}Context:\n${context}\n\nQuestion: ${params.question}`);
 
     return { system, user };
 }

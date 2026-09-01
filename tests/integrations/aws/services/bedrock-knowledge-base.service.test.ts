@@ -65,4 +65,24 @@ describe("BedrockKnowledgeBaseService", () => {
             "Failed to retrieve from Bedrock Knowledge Base KB123: AccessDeniedException",
         );
     });
+
+    it("applies an exact project metadata filter when a project is provided", async () => {
+        mockSend.mockResolvedValueOnce({ retrievalResults: [] });
+
+        await service.retrieve("give me the overview", { project: "saturam-core" });
+
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({
+                input: expect.objectContaining({
+                    retrievalQuery: { text: "give me the overview" },
+                    retrievalConfiguration: {
+                        vectorSearchConfiguration: {
+                            numberOfResults: undefined,
+                            filter: { equals: { key: "project", value: "saturam-core" } },
+                        },
+                    },
+                }),
+            }),
+        );
+    });
 });

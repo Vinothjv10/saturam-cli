@@ -18,7 +18,9 @@ export class BedrockKnowledgeBaseService {
 
     constructor(private readonly config: ConfigService) {}
 
-    private async getClient(region: string): Promise<import("@aws-sdk/client-bedrock-agent-runtime").BedrockAgentRuntimeClient> {
+    private async getClient(
+        region: string,
+    ): Promise<import("@aws-sdk/client-bedrock-agent-runtime").BedrockAgentRuntimeClient> {
         if (this.client) return this.client;
 
         const { BedrockAgentRuntimeClient } = await import("@aws-sdk/client-bedrock-agent-runtime");
@@ -34,7 +36,10 @@ export class BedrockKnowledgeBaseService {
     /**
      * Retrieves the most relevant document chunks from the configured Bedrock Knowledge Base for a query.
      */
-    public async retrieve(query: string, options?: { numberOfResults?: number }): Promise<RetrievedChunk[]> {
+    public async retrieve(
+        query: string,
+        options?: { numberOfResults?: number; project?: string },
+    ): Promise<RetrievedChunk[]> {
         const { RetrieveCommand } = await import("@aws-sdk/client-bedrock-agent-runtime");
         const { knowledgeBaseId, region } = await this.config.getBedrockKnowledgeBaseConfig();
         const client = await this.getClient(region);
@@ -46,9 +51,17 @@ export class BedrockKnowledgeBaseService {
                 new RetrieveCommand({
                     knowledgeBaseId,
                     retrievalQuery: { text: query },
-                    retrievalConfiguration: options?.numberOfResults
-                        ? { vectorSearchConfiguration: { numberOfResults: options.numberOfResults } }
-                        : undefined,
+                    retrievalConfiguration:
+                        options?.numberOfResults || options?.project
+                            ? {
+                                  vectorSearchConfiguration: {
+                                      numberOfResults: options.numberOfResults,
+                                      filter: options.project
+                                          ? { equals: { key: "project", value: options.project } }
+                                          : undefined,
+                                  },
+                              }
+                            : undefined,
                 }),
             );
 

@@ -347,9 +347,26 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(messages).toHaveLength(2);
             expect(String(messages[1].content)).toContain("auth uses OAuth2");
             expect(String(messages[1].content)).toContain("what is the auth flow?");
-            expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe(
-                "The auth flow uses OAuth2.",
-            );
+            expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe("The auth flow uses OAuth2.");
+        });
+
+        it("normalizes --project and scopes both Bedrock retrieval and the LLM prompt", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("give me the overview").mockResolvedValueOnce("");
+            (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
+                {
+                    content: "Saturam Core overview",
+                    location: "s3://bucket/saturam-core/google-docs/overview.md",
+                },
+            ]);
+
+            await command.execute({ ...chatInputs, project: "Saturam Core" });
+
+            expect(mockKnowledgeBase.retrieve).toHaveBeenCalledWith("give me the overview", {
+                project: "saturam-core",
+            });
+            const [messages] = (mockLlmService.prompt as jest.Mock).mock.calls[0];
+            expect(String(messages[0].content)).toContain('selected project "saturam-core"');
+            expect(String(messages[1].content)).toContain("Selected project: saturam-core");
         });
 
         it("shows a terminal loading spinner while waiting for the chat answer", async () => {
