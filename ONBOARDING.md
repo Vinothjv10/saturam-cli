@@ -98,7 +98,7 @@ When syncing via Google Sheets, the orchestrator:
 
 1. **Scans Cells for Document Links**: Cells are recursively searched for Confluence pages, Jira tickets, Google Docs, and nested Google Sheets.
 2. **Dynamic Tab Discovery**: If `range` is omitted in the configuration, all sheet tabs are automatically discovered and processed in an optimized batch network call.
-3. **Tab-to-Project name mapping**: Tab titles (e.g. `ProjectA`, `ProjectB`) are treated as project folder names, syncing their resolved documents under corresponding directories (e.g. `onboarding/confluence/projecta/...`).
+3. **Tab-to-Project name mapping**: Tab titles (e.g. `ProjectA`, `ProjectB`) are treated as project folder names, syncing their resolved documents under corresponding directories (e.g. `onboarding/projecta/confluence/...`).
 4. **Nested Sheets Sync**: Extracted Google Sheet links inside spreadsheet cells are processed recursively as sub-sheet tasks, saving their raw data as JSON sidecar structures.
 
 ### Project-Level Configuration (`.sateng/onboarding.json`)
@@ -185,7 +185,7 @@ sat-cli onboard --project-name "Saturam Core"
 sat-cli onboard <spreadsheet_url_or_id> --project-name "Saturam Core"
 ```
 
-This affects every task type in the run (Confluence, Jira, Google Docs, Google Sheets, and sheet-resolved links) — e.g. `onboarding/confluence/saturam-core/...` instead of each task's own derived name.
+This affects every task type in the run (Confluence, Jira, Google Docs, Google Sheets, and sheet-resolved links) — output folders are always `onboarding/<project-name>/<category>/...` (e.g. `onboarding/saturam-core/confluence/...`), rather than each task's own derived name. Documents synced without `--project-name` (and not associated with any project in `.sateng/onboarding.json`) stay directly under `onboarding/<category>/...`, with no project folder.
 
 #### Uploading to S3
 
@@ -201,7 +201,7 @@ For each file, this:
 2. Checks whether the object already exists at that key in S3.
 3. Uploads it only if it doesn't already exist — existing objects are left untouched and reported as skipped.
 
-Local files always mirror their path under `~/.config/sateng/onboarding/` as the S3 key (e.g. `google-docs/saturam-core/golden-record.md`), optionally under the bucket's configured prefix.
+Local files always mirror their path under `~/.config/sateng/onboarding/` as the S3 key (e.g. `saturam-core/google-docs/golden-record.md`), optionally under the bucket's configured prefix.
 
 #### Listing Synced Documents
 

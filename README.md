@@ -98,7 +98,7 @@ sat-cli onboard
 sat-cli onboard <spreadsheet-url-or-id>
 
 # Override the output project folder name for every document fetched in this run
-# (e.g. onboarding/confluence/<project-name>/... instead of each config/tab-derived name)
+# (e.g. onboarding/<project-name>/confluence/... instead of each config/tab-derived name)
 sat-cli onboard --project-name "Saturam Core"
 sat-cli onboard <spreadsheet-url-or-id> --project-name "Saturam Core"
 

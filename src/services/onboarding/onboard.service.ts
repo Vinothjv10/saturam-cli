@@ -421,7 +421,7 @@ export class OnboardService {
                     const candidatePath = outputPath
                         ? resolve(cwd, outputPath)
                         : sanitizedProj
-                          ? join(baseOnboardDir, subdir, sanitizedProj, `${safeTitle}.md`)
+                          ? join(baseOnboardDir, sanitizedProj, subdir, `${safeTitle}.md`)
                           : join(baseOnboardDir, subdir, `${safeTitle}.md`);
 
                     const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
@@ -462,7 +462,7 @@ export class OnboardService {
             const sanitizedProj = this.sanitizeProjectName(projectName);
 
             const outputDir = sanitizedProj
-                ? join(baseOnboardDir, "google-sheets", sanitizedProj)
+                ? join(baseOnboardDir, sanitizedProj, "google-sheets")
                 : join(baseOnboardDir, "google-sheets");
             const jsonPath = join(outputDir, `${safeTitle}.json`);
 
@@ -580,29 +580,33 @@ export class OnboardService {
     public async listSyncedDocuments(): Promise<void> {
         const baseOnboardDir = this.resolveBaseOnboardDir();
         const grouped: Record<string, Record<string, string[]>> = {};
+        const categoryNames: readonly string[] = OnboardService.ONBOARD_SUBDIRS;
 
-        for (const subdir of OnboardService.ONBOARD_SUBDIRS) {
-            const subdirPath = join(baseOnboardDir, subdir);
-            let entries: import("fs").Dirent[];
-            try {
-                entries = await readdir(subdirPath, { withFileTypes: true });
-            } catch {
+        let topEntries: import("fs").Dirent[];
+        try {
+            topEntries = await readdir(baseOnboardDir, { withFileTypes: true });
+        } catch {
+            topEntries = [];
+        }
+
+        for (const entry of topEntries) {
+            if (!entry.isDirectory()) continue;
+            const name = entry.name;
+
+            if (categoryNames.includes(name)) {
+                // Project-less documents synced without --project-name sit directly in the category folder.
+                const docs = await this.describeDocsInDir(join(baseOnboardDir, name), name);
+                if (docs.length > 0) {
+                    (grouped["(no project)"] ??= {})[name] = docs;
+                }
                 continue;
             }
 
-            for (const entry of entries) {
-                if (entry.isDirectory()) {
-                    const projectName = entry.name;
-                    const docs = await this.describeDocsInDir(join(subdirPath, projectName), subdir);
-                    if (docs.length > 0) {
-                        (grouped[projectName] ??= {})[subdir] = docs;
-                    }
-                } else if (entry.isFile() && this.isDocFile(entry.name, subdir)) {
-                    const doc = await this.describeDoc(join(subdirPath, entry.name), subdir);
-                    if (doc) {
-                        (grouped["(no project)"] ??= {})[subdir] ??= [];
-                        grouped["(no project)"][subdir].push(doc);
-                    }
+            // Otherwise this is a project folder — look for each category subfolder inside it.
+            for (const category of OnboardService.ONBOARD_SUBDIRS) {
+                const docs = await this.describeDocsInDir(join(baseOnboardDir, name, category), category);
+                if (docs.length > 0) {
+                    (grouped[name] ??= {})[category] = docs;
                 }
             }
         }

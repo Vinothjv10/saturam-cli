@@ -506,8 +506,8 @@ describe("OnboardService", () => {
 
     describe("uploadToS3", () => {
         const files = [
-            "/mock/personal/onboarding/google-docs/saturam/doc.md",
-            "/mock/personal/onboarding/google-docs/saturam/doc.json",
+            "/mock/personal/onboarding/saturam/google-docs/doc.md",
+            "/mock/personal/onboarding/saturam/google-docs/doc.json",
         ];
 
         it("does nothing and warns when there are no files to upload", async () => {
@@ -525,14 +525,14 @@ describe("OnboardService", () => {
 
             expect(result).toEqual({ uploaded: 2, skipped: 0, failed: 0 });
             expect(mockS3.ensurePrefixExists).toHaveBeenCalledTimes(1);
-            expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("google-docs/saturam");
+            expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("saturam/google-docs");
             expect(mockS3.putObject).toHaveBeenCalledWith(
-                "google-docs/saturam/doc.md",
+                "saturam/google-docs/doc.md",
                 expect.any(Buffer),
                 "text/markdown",
             );
             expect(mockS3.putObject).toHaveBeenCalledWith(
-                "google-docs/saturam/doc.json",
+                "saturam/google-docs/doc.json",
                 expect.any(Buffer),
                 "application/json",
             );
@@ -569,12 +569,12 @@ describe("OnboardService", () => {
             // No throw — nothing more to assert since output only goes to the logger
         });
 
-        it("groups documents by project name and category", async () => {
+        it("groups documents by project name and category (project folder first, category nested inside)", async () => {
             (readdir as jest.Mock).mockImplementation(async (dirPath: string) => {
-                if (dirPath === "/mock/personal/onboarding/google-docs") {
+                if (dirPath === "/mock/personal/onboarding") {
                     return [{ name: "saturam", isDirectory: () => true, isFile: () => false }];
                 }
-                if (dirPath === "/mock/personal/onboarding/google-docs/saturam") {
+                if (dirPath === "/mock/personal/onboarding/saturam/google-docs") {
                     return [{ name: "golden-record.md", isDirectory: () => false, isFile: () => true }];
                 }
                 throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -588,7 +588,32 @@ describe("OnboardService", () => {
 
             await service.listSyncedDocuments();
 
-            expect(readdir).toHaveBeenCalledWith("/mock/personal/onboarding/google-docs", { withFileTypes: true });
+            expect(readdir).toHaveBeenCalledWith("/mock/personal/onboarding", { withFileTypes: true });
+            expect(readdir).toHaveBeenCalledWith("/mock/personal/onboarding/saturam/google-docs", {
+                withFileTypes: true,
+            });
+        });
+
+        it("lists project-less documents (synced without --project-name) under a category folder at the root", async () => {
+            (readdir as jest.Mock).mockImplementation(async (dirPath: string) => {
+                if (dirPath === "/mock/personal/onboarding") {
+                    return [{ name: "confluence", isDirectory: () => true, isFile: () => false }];
+                }
+                if (dirPath === "/mock/personal/onboarding/confluence") {
+                    return [{ name: "some-page.md", isDirectory: () => false, isFile: () => true }];
+                }
+                throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+            });
+            (readFile as jest.Mock).mockImplementation(async (filePath: string) => {
+                if (filePath.endsWith(".json")) {
+                    return JSON.stringify({ title: "Some Page" });
+                }
+                throw new Error("unexpected read");
+            });
+
+            await service.listSyncedDocuments();
+
+            expect(readdir).toHaveBeenCalledWith("/mock/personal/onboarding/confluence", { withFileTypes: true });
         });
     });
 });
