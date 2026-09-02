@@ -107,6 +107,26 @@ export class OnboardService {
     /** Content files written during the current sync() call, with their S3/Bedrock metadata attributes. */
     private syncedFiles: SyncedDocument[] = [];
 
+    /** Normalizes a project name the same way sanitizeProjectName does, for case/punctuation-insensitive matching. */
+    private normalizeProjectKey(name: string): string {
+        return name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "");
+    }
+
+    /**
+     * When projectNameOverride is set, restricts sync() to only the tasks belonging to that
+     * project (matched case/punctuation-insensitively against the task's project name). Tasks
+     * with no project name (global, non-project-scoped config entries) are excluded, since they
+     * don't belong to any single project. With no override, everything matches.
+     */
+    private matchesProjectFilter(projectName?: string): boolean {
+        if (!this.projectNameOverride) return true;
+        if (!projectName) return false;
+        return this.normalizeProjectKey(projectName) === this.normalizeProjectKey(this.projectNameOverride);
+    }
+
     public async sync(
         config: OnboardConfig,
         cwd: string,
@@ -115,29 +135,52 @@ export class OnboardService {
         this.projectNameOverride = projectNameOverride;
         this.syncedFiles = [];
 
-        // Resolve onboarding sheets links
+        const allProjectEntries = Object.entries(config.projects || {});
+        const filteredProjectEntries = projectNameOverride
+            ? allProjectEntries.filter(([projectName]) => this.matchesProjectFilter(projectName))
+            : allProjectEntries;
+
+        if (projectNameOverride && filteredProjectEntries.length === 0 && allProjectEntries.length > 0) {
+            logger.warn(
+                `No project named "${projectNameOverride}" found in the onboarding config. ` +
+                    `Available projects: ${allProjectEntries.map(([name]) => name).join(", ")}`,
+            );
+        }
+
+        // Resolve onboarding sheets links. Global onboardingSheets entries are still resolved even
+        // when filtering by project — each sheet tab (or explicit cell link) resolves to its own
+        // project name, and the resulting tasks are filtered by that project name below.
         const globalSheetConfigs = config.onboardingSheets || [];
-        const projectSheetConfigs = Object.entries(config.projects || {}).flatMap(
-            ([projectName, projectConfig]) =>
-                projectConfig.onboardingSheets?.map((sheetConfig) => ({
-                    ...sheetConfig,
-                    projectName,
-                })) || [],
+        const projectSheetConfigs = filteredProjectEntries.flatMap(([projectName, projectConfig]) =>
+            projectConfig.onboardingSheets?.map((sheetConfig) => ({
+                ...sheetConfig,
+                projectName,
+            })) || [],
         );
         const allSheetConfigs = [...globalSheetConfigs, ...projectSheetConfigs];
         const sheetResolved =
             allSheetConfigs.length > 0
                 ? await this.resolveTasksFromSheets(allSheetConfigs)
                 : { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
+        sheetResolved.confluenceTasks = sheetResolved.confluenceTasks.filter((t) =>
+            this.matchesProjectFilter(t.projectName),
+        );
+        sheetResolved.jiraTasks = sheetResolved.jiraTasks.filter((t) => this.matchesProjectFilter(t.projectName));
+        sheetResolved.googleTasks = sheetResolved.googleTasks.filter((t) => this.matchesProjectFilter(t.projectName));
+        sheetResolved.sheetTasks = sheetResolved.sheetTasks.filter((t) => this.matchesProjectFilter(t.projectName));
 
         // Collect Confluence tasks
-        const globalConfluenceTasks =
-            config.confluence?.pages?.map((pageEntry) => ({
-                pageEntry,
-                baseUrl: config.confluence?.baseUrl,
-            })) || [];
+        const globalConfluenceTasks = projectNameOverride
+            ? []
+            : config.confluence?.pages?.map((pageEntry) => ({
+                  pageEntry,
+                  baseUrl: config.confluence?.baseUrl,
+              })) || [];
 
-        const globalSpacePages = await (config.confluence?.spaces || []).reduce(
+        const spacesToResolve = (config.confluence?.spaces || []).filter((spaceKey) =>
+            this.matchesProjectFilter(spaceKey),
+        );
+        const globalSpacePages = await spacesToResolve.reduce(
             async (accPromise, spaceKey) => {
                 const acc = await accPromise;
                 const targetBaseUrl = config.confluence?.baseUrl;
@@ -162,7 +205,7 @@ export class OnboardService {
             Promise.resolve([] as ConfluenceTask[]),
         );
 
-        const projectConfluenceTasks = await Object.entries(config.projects || {}).reduce(
+        const projectConfluenceTasks = await filteredProjectEntries.reduce(
             async (accPromise, [projectName, projectConfig]) => {
                 const acc = await accPromise;
                 if (!projectConfig.confluence) return acc;
@@ -211,13 +254,14 @@ export class OnboardService {
         ];
 
         // Collect Jira Tasks
-        const globalJiraTasks =
-            config.jira?.tickets?.map((ticketEntry) => ({
-                ticketEntry,
-                baseUrl: config.jira?.baseUrl,
-            })) || [];
+        const globalJiraTasks = projectNameOverride
+            ? []
+            : config.jira?.tickets?.map((ticketEntry) => ({
+                  ticketEntry,
+                  baseUrl: config.jira?.baseUrl,
+              })) || [];
 
-        const projectJiraTasks = await Object.entries(config.projects || {}).reduce(
+        const projectJiraTasks = await filteredProjectEntries.reduce(
             async (accPromise, [projectName, projectConfig]) => {
                 const acc = await accPromise;
                 if (!projectConfig.jira) return acc;
@@ -259,8 +303,10 @@ export class OnboardService {
         const jiraTasks: JiraTask[] = [...globalJiraTasks, ...projectJiraTasks, ...sheetResolved.jiraTasks];
 
         // Collect Google Tasks
-        const globalGoogleTasks = config.googleDocs?.docs?.map((docEntry) => ({ docEntry })) || [];
-        const projectGoogleTasks = Object.entries(config.projects || {}).flatMap(
+        const globalGoogleTasks = projectNameOverride
+            ? []
+            : config.googleDocs?.docs?.map((docEntry) => ({ docEntry })) || [];
+        const projectGoogleTasks = filteredProjectEntries.flatMap(
             ([projectName, projectConfig]) =>
                 projectConfig.googleDocs?.docs?.map((docEntry) => ({ docEntry, projectName })) || [],
         );
@@ -355,14 +401,12 @@ export class OnboardService {
         }
 
         // Google Sheets — read project index sheet if configured
-        const globalSheetConfig = config.googleSheets;
+        const globalSheetConfig = projectNameOverride ? undefined : config.googleSheets;
         if (globalSheetConfig) {
             await this.executeGoogleSheetsTasks(globalSheetConfig, cwd);
         }
 
-        const projectSheets = Object.entries(config.projects || {}).filter(
-            ([_, projectConfig]) => projectConfig.googleSheets,
-        );
+        const projectSheets = filteredProjectEntries.filter(([_, projectConfig]) => projectConfig.googleSheets);
         for (const [projectName, projectConfig] of projectSheets) {
             if (projectConfig.googleSheets) {
                 await this.executeGoogleSheetsTasks(projectConfig.googleSheets, cwd, projectName);

@@ -32,7 +32,7 @@ const INPUTS = [
     {
         name: "project-name",
         description:
-            "Override the project name used for output folders (e.g. onboarding/confluence/<project-name>/...) for every document fetched in this run",
+            "Limit sync (and --upload-to-s3) to just the matching '<project-name>' section of your onboarding config (case-insensitive), and use it as the output folder name (e.g. onboarding/<project-name>/confluence/...). Non-project (global) config entries are skipped when this is set.",
         schema: z.string().optional(),
     },
     {

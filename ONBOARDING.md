@@ -186,16 +186,18 @@ Fetch and synchronize documents directly from a Google Sheet URL or spreadsheet 
 npx ts-node src/entrypoints/main.ts onboard <spreadsheet_url_or_id>
 ```
 
-#### Overriding the Output Project Name
+#### Syncing a Single Project
 
-By default, output folders are named after each config entry's project key (or, for `onboardingSheets`, the sheet tab title). Pass `--project-name` to force every document fetched in a run into a single project folder, regardless of how each source is configured:
+By default, `sat-cli onboard` syncs every source in `.sateng/onboarding.json` — global (non-project) entries and every `projects.*` section. Pass `--project-name <name>` to restrict the run to just the matching `projects.<name>` section (matched case/punctuation-insensitively against the config key):
 
 ```bash
-sat-cli onboard --project-name "Saturam Core"
-sat-cli onboard <spreadsheet_url_or_id> --project-name "Saturam Core"
+sat-cli onboard --project-name "SMILE"
+sat-cli onboard --project-name "SMILE" --upload-to-s3
 ```
 
-This affects every task type in the run (Confluence, Jira, Google Docs, Google Sheets, and sheet-resolved links) — output folders are always `onboarding/<project-name>/<category>/...` (e.g. `onboarding/saturam-core/confluence/...`), rather than each task's own derived name. Documents synced without `--project-name` (and not associated with any project in `.sateng/onboarding.json`) stay directly under `onboarding/<category>/...`, with no project folder.
+This resolves and fetches only that project's Confluence pages/spaces, Jira tickets/JQL, Google Docs, Google Sheets, and onboarding-sheet-resolved links — skipping every other project and any global (non-project) config entries. Output folders are named after `<project-name>` (e.g. `onboarding/smile/confluence/...`), and (with `--upload-to-s3`) only that project's files are uploaded. If no project matches, the command warns and lists the available project names from your config.
+
+For the Google Sheet direct-sync mode (`sat-cli onboard <spreadsheet_url_or_id>`), where each sheet tab is normally treated as its own project, `--project-name` restricts the run to just the tab whose title matches.
 
 #### Uploading to S3
 

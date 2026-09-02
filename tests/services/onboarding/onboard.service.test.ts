@@ -124,29 +124,6 @@ describe("OnboardService", () => {
     });
 
     describe("projectNameOverride", () => {
-        it("forces every task's output folder to the override, ignoring config-derived project names", async () => {
-            const config = {
-                projects: {
-                    MyProject: {
-                        confluence: { baseUrl: "https://confluence.example.com", pages: ["123"] },
-                    },
-                },
-            };
-
-            const doc = makeDoc({
-                id: "123",
-                source: KnowledgeSourceType.CONFLUENCE,
-                title: "Test Confluence Page",
-            });
-            mockConfluenceSource.fetch.mockResolvedValue(doc);
-
-            await service.sync(config, "/mock/cwd", "Custom Project");
-
-            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) => String(call[0]).endsWith(".md"));
-            expect(writeCall[0]).toContain("/custom-project/");
-            expect(writeCall[0]).not.toContain("/myproject/");
-        });
-
         it("uses the auto-derived project name when no override is passed", async () => {
             const config = {
                 projects: {
@@ -167,6 +144,79 @@ describe("OnboardService", () => {
 
             const writeCall = (writeFile as jest.Mock).mock.calls.find((call) => String(call[0]).endsWith(".md"));
             expect(writeCall[0]).toContain("/myproject/");
+        });
+
+        it("syncs only the matching project's tasks (case/punctuation-insensitive) and writes them under it", async () => {
+            const config = {
+                confluence: { baseUrl: "https://confluence.example.com", pages: ["global-page"] },
+                projects: {
+                    "My Project": {
+                        confluence: { baseUrl: "https://confluence.example.com", pages: ["123"] },
+                    },
+                    OtherProject: {
+                        confluence: { baseUrl: "https://confluence.example.com", pages: ["456"] },
+                    },
+                },
+            };
+
+            const doc = makeDoc({
+                id: "123",
+                source: KnowledgeSourceType.CONFLUENCE,
+                title: "Test Confluence Page",
+            });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
+
+            await service.sync(config, "/mock/cwd", "MY-PROJECT");
+
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(1);
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("123", {
+                baseUrl: "https://confluence.example.com",
+            });
+
+            const writeCall = (writeFile as jest.Mock).mock.calls.find((call) => String(call[0]).endsWith(".md"));
+            expect(writeCall[0]).toContain("/my-project/");
+        });
+
+        it("syncs nothing and warns when the override matches no project in the config", async () => {
+            const config = {
+                projects: {
+                    MyProject: {
+                        confluence: { baseUrl: "https://confluence.example.com", pages: ["123"] },
+                    },
+                },
+            };
+
+            const result = await service.sync(config, "/mock/cwd", "NoSuchProject");
+
+            expect(mockConfluenceSource.fetch).not.toHaveBeenCalled();
+            expect(result.filesWritten).toHaveLength(0);
+        });
+
+        it("excludes global (non-project) config entries when filtering to a project", async () => {
+            const config = {
+                confluence: { baseUrl: "https://confluence.example.com", pages: ["global-page"] },
+                jira: { baseUrl: "https://jira.example.com", tickets: ["GLOBAL-1"] },
+                googleDocs: { docs: ["global-doc"] },
+                projects: {
+                    MyProject: {
+                        confluence: { baseUrl: "https://confluence.example.com", pages: ["123"] },
+                    },
+                },
+            };
+
+            const doc = makeDoc({
+                id: "123",
+                source: KnowledgeSourceType.CONFLUENCE,
+                title: "Test Confluence Page",
+            });
+            mockConfluenceSource.fetch.mockResolvedValue(doc);
+
+            await service.sync(config, "/mock/cwd", "MyProject");
+
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(1);
+            expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("123", expect.any(Object));
+            expect(mockJiraSource.fetch).not.toHaveBeenCalled();
+            expect(mockGoogleDriveSource.fetch).not.toHaveBeenCalled();
         });
     });
 
@@ -513,6 +563,53 @@ describe("OnboardService", () => {
 
             expect(mkdir).toHaveBeenCalled();
             expect(writeFile).toHaveBeenCalled();
+        });
+
+        it("filters tab-derived projects by --project-name without skipping global onboardingSheets resolution", async () => {
+            const config = {
+                onboardingSheets: [
+                    {
+                        spreadsheetId: "multi-tab-sheet-id",
+                    },
+                ],
+            };
+
+            const mockMeta = {
+                spreadsheetId: "multi-tab-sheet-id",
+                title: "Multi-tab Onboarding",
+                sheets: [{ title: "ProjectAlpha" }, { title: "ProjectBeta" }],
+            } as any;
+
+            mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue(mockMeta);
+            mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
+                valueRanges: [
+                    {
+                        range: "ProjectAlpha!A1:Z100",
+                        values: [["Jira issue A", "https://saturam.atlassian.net/browse/DB-826"]],
+                    },
+                    {
+                        range: "ProjectBeta!A1:Z100",
+                        values: [
+                            ["Confluence page B", "https://saturam.atlassian.net/wiki/spaces/Alkem/pages/231145593"],
+                        ],
+                    },
+                ],
+            });
+
+            mockJiraSource.fetch.mockResolvedValue(
+                makeDoc({ id: "DB-826", source: KnowledgeSourceType.JIRA, title: "DB-826 Ticket" }),
+            );
+            mockConfluenceSource.fetch.mockResolvedValue(
+                makeDoc({ id: "231145593", source: KnowledgeSourceType.CONFLUENCE, title: "Confluence Page" }),
+            );
+
+            await service.sync(config, "/mock/cwd", "ProjectAlpha");
+
+            // The sheet is still read (global onboardingSheets entries must still resolve so their
+            // per-tab projects can be discovered), but only the matching tab's task is fetched.
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalled();
+            expect(mockJiraSource.fetch).toHaveBeenCalledWith("DB-826", { baseUrl: "https://saturam.atlassian.net" });
+            expect(mockConfluenceSource.fetch).not.toHaveBeenCalled();
         });
     });
 
