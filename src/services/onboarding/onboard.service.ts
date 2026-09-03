@@ -127,6 +127,108 @@ export class OnboardService {
         return this.normalizeProjectKey(projectName) === this.normalizeProjectKey(this.projectNameOverride);
     }
 
+    /** Header names recognized in a structured project-config sheet (see onboarding-sheet-template.csv). */
+    private static readonly PROJECT_SHEET_REQUIRED_COLUMN = "project_name";
+
+    private normalizeColumnName(header: string): string {
+        return header
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/(^_|_$)/g, "");
+    }
+
+    private splitList(value: string | undefined): string[] {
+        if (!value?.trim()) return [];
+        return value
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean);
+    }
+
+    /**
+     * Builds an OnboardConfig from a structured project sheet: one row per project, with
+     * comma-separated multi-value columns (confluence_pages, jira_tickets, google_docs,
+     * onboarding_sheet_ids). See onboarding-sheet-template.csv for the full column reference.
+     */
+    private buildConfigFromProjectRows(header: string[], rows: string[][]): OnboardConfig {
+        const col = (row: string[], name: string): string | undefined => {
+            const idx = header.indexOf(name);
+            return idx === -1 ? undefined : row[idx]?.trim() || undefined;
+        };
+
+        const config: OnboardConfig = { projects: {} };
+
+        for (const row of rows) {
+            const projectName = col(row, "project_name");
+            if (!projectName) continue;
+
+            const confluenceBaseUrl = col(row, "confluence_base_url");
+            if (confluenceBaseUrl) {
+                config.confluence = { ...config.confluence, baseUrl: confluenceBaseUrl };
+            }
+            const jiraBaseUrl = col(row, "jira_base_url");
+            if (jiraBaseUrl) {
+                config.jira = { ...config.jira, baseUrl: jiraBaseUrl };
+            }
+
+            const pages = this.splitList(col(row, "confluence_pages"));
+            const space = col(row, "confluence_space");
+            const tickets = this.splitList(col(row, "jira_tickets"));
+            const jql = col(row, "jira_jql");
+            const docs = this.splitList(col(row, "google_docs"));
+            const sheetId = col(row, "google_sheet_id");
+            const sheetRange = col(row, "google_sheet_range");
+            const onboardingSheetIds = this.splitList(col(row, "onboarding_sheet_ids"));
+
+            config.projects![projectName] = {
+                ...(pages.length || space
+                    ? { confluence: { ...(pages.length ? { pages } : {}), ...(space ? { space } : {}) } }
+                    : {}),
+                ...(tickets.length || jql
+                    ? { jira: { ...(tickets.length ? { tickets } : {}), ...(jql ? { jql } : {}) } }
+                    : {}),
+                ...(docs.length ? { googleDocs: { docs } } : {}),
+                ...(sheetId
+                    ? { googleSheets: { spreadsheetId: sheetId, ...(sheetRange ? { range: sheetRange } : {}) } }
+                    : {}),
+                ...(onboardingSheetIds.length
+                    ? { onboardingSheets: onboardingSheetIds.map((id) => ({ spreadsheetId: id })) }
+                    : {}),
+            };
+        }
+
+        return OnboardConfigSchema.parse(config);
+    }
+
+    /**
+     * Reads a Google Sheet given directly as the `sat-cli onboard` argument and decides how
+     * to treat it:
+     *  - If the first tab's header row contains a "project_name" column, it's a structured
+     *    project-config sheet (one row per project, see onboarding-sheet-template.csv) — parsed
+     *    directly into an OnboardConfig, equivalent to a hand-written onboarding.json.
+     *  - Otherwise, falls back to the legacy "sheet of links" mode: cells are scanned for
+     *    Confluence/Jira/Google Doc/Sheet URLs during sync() (see resolveTasksFromSheets).
+     */
+    public async resolveConfigFromSheet(spreadsheetId: string): Promise<OnboardConfig> {
+        const meta = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
+        const firstSheetTitle = meta.sheets?.[0]?.title ?? "Sheet1";
+        const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, [firstSheetTitle]);
+        const rows = batchData.valueRanges?.[0]?.values ?? [];
+        const [headerRow, ...dataRows] = rows;
+        const header = (headerRow ?? []).map((h) => this.normalizeColumnName(String(h ?? "")));
+
+        if (!header.includes(OnboardService.PROJECT_SHEET_REQUIRED_COLUMN)) {
+            logger.info(`Sheet ${spreadsheetId} has no "project_name" column — treating it as a sheet of links.`);
+            return { onboardingSheets: [{ spreadsheetId }] };
+        }
+
+        logger.info(
+            `Sheet ${spreadsheetId} looks like a structured project sheet — building onboarding config from it.`,
+        );
+        return this.buildConfigFromProjectRows(header, dataRows);
+    }
+
     public async sync(
         config: OnboardConfig,
         cwd: string,

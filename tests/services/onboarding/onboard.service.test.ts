@@ -753,4 +753,81 @@ describe("OnboardService", () => {
             expect(readdir).toHaveBeenCalledWith("/mock/personal/onboarding/confluence", { withFileTypes: true });
         });
     });
+
+    describe("resolveConfigFromSheet", () => {
+        it("parses a structured project sheet (with a project_name column) into an OnboardConfig", async () => {
+            mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue({
+                spreadsheetId: "projects-sheet-id",
+                sheets: [{ title: "Sheet1" }],
+            } as any);
+            mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
+                valueRanges: [
+                    {
+                        values: [
+                            [
+                                "project_name",
+                                "confluence_base_url",
+                                "confluence_pages",
+                                "confluence_space",
+                                "jira_base_url",
+                                "jira_tickets",
+                                "jira_jql",
+                                "google_docs",
+                                "google_sheet_id",
+                                "google_sheet_range",
+                                "onboarding_sheet_ids",
+                            ],
+                            [
+                                "Saturam",
+                                "https://saturam.atlassian.net",
+                                "123456789,987654321",
+                                "PROJ",
+                                "https://saturam.atlassian.net",
+                                "PROJ-123,PROJ-456",
+                                "",
+                                "doc-id-1",
+                                "sheet-id-1",
+                                "Sheet1!A1:E100",
+                                "links-sheet-id",
+                            ],
+                            ["Acme", "", "", "ACME", "", "", "project = ACME AND status != Done", "", "", "", ""],
+                            ["", "", "", "", "", "", "", "", "", "", ""],
+                        ],
+                    },
+                ],
+            } as any);
+
+            const config = await service.resolveConfigFromSheet("projects-sheet-id");
+
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("projects-sheet-id", ["Sheet1"]);
+            expect(config.confluence?.baseUrl).toBe("https://saturam.atlassian.net");
+            expect(config.jira?.baseUrl).toBe("https://saturam.atlassian.net");
+            expect(config.projects?.Saturam).toEqual({
+                confluence: { pages: ["123456789", "987654321"], space: "PROJ" },
+                jira: { tickets: ["PROJ-123", "PROJ-456"] },
+                googleDocs: { docs: ["doc-id-1"] },
+                googleSheets: { spreadsheetId: "sheet-id-1", range: "Sheet1!A1:E100" },
+                onboardingSheets: [{ spreadsheetId: "links-sheet-id" }],
+            });
+            expect(config.projects?.Acme).toEqual({
+                confluence: { space: "ACME" },
+                jira: { jql: "project = ACME AND status != Done" },
+            });
+            expect(Object.keys(config.projects ?? {})).toEqual(["Saturam", "Acme"]);
+        });
+
+        it("falls back to sheet-of-links mode when there is no project_name column", async () => {
+            mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue({
+                spreadsheetId: "links-only-sheet-id",
+                sheets: [{ title: "Sheet1" }],
+            } as any);
+            mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
+                valueRanges: [{ values: [["Resource", "Link"], ["Runbook", "https://saturam.atlassian.net/wiki/x"]] }],
+            } as any);
+
+            const config = await service.resolveConfigFromSheet("links-only-sheet-id");
+
+            expect(config).toEqual({ onboardingSheets: [{ spreadsheetId: "links-only-sheet-id" }] });
+        });
+    });
 });

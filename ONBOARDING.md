@@ -186,6 +186,11 @@ Fetch and synchronize documents directly from a Google Sheet URL or spreadsheet 
 npx ts-node src/entrypoints/main.ts onboard <spreadsheet_url_or_id>
 ```
 
+`sat-cli onboard` reads the first tab of the sheet and picks one of two modes based on its header row:
+
+- **Structured project sheet** — if the header row contains a `project_name` column, the sheet is parsed directly into the same shape as `.sateng/onboarding.json` (one row per project). See [`onboarding-sheet-template.csv`](onboarding-sheet-template.csv) for the full column reference — import it into Google Sheets (File → Import) as a starting point, or copy its header row into a new sheet. Multi-value columns (`confluence_pages`, `jira_tickets`, `google_docs`, `onboarding_sheet_ids`) are comma-separated within a cell. The resolved config is also written to `.sateng/onboarding.json` in the current directory before syncing — refreshed on every run — so you always have a local, inspectable/editable copy of what the sheet resolved to.
+- **Sheet of links** (legacy) — if there's no `project_name` column, every cell is scanned for Confluence/Jira/Google Doc/Sheet URLs instead, with each sheet tab treated as its own project (see [Google Sheets URL Resolution & Project Tab Mapping](#google-sheets-url-resolution--project-tab-mapping) above).
+
 #### Syncing a Single Project
 
 By default, `sat-cli onboard` syncs every source in `.sateng/onboarding.json` — global (non-project) entries and every `projects.*` section. Pass `--project-name <name>` to restrict the run to just the matching `projects.<name>` section (matched case/punctuation-insensitively against the config key):
@@ -197,7 +202,7 @@ sat-cli onboard --project-name "SMILE" --upload-to-s3
 
 This resolves and fetches only that project's Confluence pages/spaces, Jira tickets/JQL, Google Docs, Google Sheets, and onboarding-sheet-resolved links — skipping every other project and any global (non-project) config entries. Output folders are named after `<project-name>` (e.g. `onboarding/smile/confluence/...`), and (with `--upload-to-s3`) only that project's files are uploaded. If no project matches, the command warns and lists the available project names from your config.
 
-For the Google Sheet direct-sync mode (`sat-cli onboard <spreadsheet_url_or_id>`), where each sheet tab is normally treated as its own project, `--project-name` restricts the run to just the tab whose title matches.
+For the Google Sheet direct-sync mode (`sat-cli onboard <spreadsheet_url_or_id>`), `--project-name` restricts the run to just the matching project: the `project_name` row for a structured project sheet, or the sheet tab whose title matches in sheet-of-links mode.
 
 #### Uploading to S3
 

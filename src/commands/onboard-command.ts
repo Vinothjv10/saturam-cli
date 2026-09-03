@@ -161,9 +161,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                 : arg;
 
             logger.info(`Running onboarding sync directly from Google Sheet ID: ${spreadsheetId}`);
-            const parsedConfig = {
-                onboardingSheets: [{ spreadsheetId }],
-            };
+            const parsedConfig = await this.onboardService.resolveConfigFromSheet(spreadsheetId);
+            if (parsedConfig.projects && Object.keys(parsedConfig.projects).length > 0) {
+                this.saveResolvedConfig(parsedConfig, cwd);
+            }
             const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
             if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
             return;
@@ -175,6 +176,21 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         const parsedConfig = await this.configService.loadOnboardingConfig(configPath);
         const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
         if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
+    }
+
+    /**
+     * When syncing directly from a structured project sheet, mirrors the resolved config to
+     * .sateng/onboarding.json — refreshed on every run so it always reflects the sheet's latest
+     * state, and so the sheet-derived config can be inspected/diffed/edited locally like any
+     * other onboarding.json.
+     */
+    private saveResolvedConfig(config: unknown, cwd: string): void {
+        const configDir = resolve(cwd, ".sateng");
+        const targetPath = resolve(configDir, "onboarding.json");
+
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(targetPath, `${JSON.stringify(config, null, 4)}\n`, "utf-8");
+        logger.info(`Saved resolved onboarding config from Google Sheet to: ${targetPath}`);
     }
 
     /**

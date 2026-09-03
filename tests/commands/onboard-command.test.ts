@@ -25,6 +25,11 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             sync: jest.fn().mockResolvedValue({ filesWritten: [] }),
             uploadToS3: jest.fn().mockResolvedValue({ uploaded: 0, skipped: 0, failed: 0 }),
             listSyncedDocuments: jest.fn().mockResolvedValue(undefined),
+            resolveConfigFromSheet: jest
+                .fn()
+                .mockImplementation((spreadsheetId: string) =>
+                    Promise.resolve({ onboardingSheets: [{ spreadsheetId }] }),
+                ),
         } as any;
 
         mockConfigService = {
@@ -478,6 +483,65 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             const samplePath = path.join(configDir, "onboarding.sample.json");
             expect(fs.existsSync(samplePath)).toBe(true);
+        });
+    });
+
+    describe("Google Sheet mode — mirroring the resolved config to onboarding.json", () => {
+        let tmpDir: string;
+        let originalCwdEnv: string | undefined;
+
+        beforeEach(() => {
+            tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sateng-onboard-sheet-"));
+            originalCwdEnv = process.env.SATENG_ORIGINAL_CWD;
+            process.env.SATENG_ORIGINAL_CWD = tmpDir;
+        });
+
+        afterEach(() => {
+            if (originalCwdEnv === undefined) {
+                delete process.env.SATENG_ORIGINAL_CWD;
+            } else {
+                process.env.SATENG_ORIGINAL_CWD = originalCwdEnv;
+            }
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        });
+
+        it("writes the resolved config to .sateng/onboarding.json when the sheet is a structured project sheet", async () => {
+            const structuredConfig = {
+                confluence: { baseUrl: "https://saturam.atlassian.net" },
+                projects: { Saturam: { jira: { tickets: ["PROJ-1"] } } },
+            };
+            (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(structuredConfig);
+
+            await command.execute({
+                configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
+            const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
+            expect(fs.existsSync(configPath)).toBe(true);
+            expect(JSON.parse(fs.readFileSync(configPath, "utf-8"))).toEqual(structuredConfig);
+            expect(mockOnboardService.sync).toHaveBeenCalledWith(structuredConfig, expect.any(String), undefined);
+        });
+
+        it("does not write onboarding.json when the sheet has no project_name column (sheet-of-links fallback)", async () => {
+            const fallbackConfig = { onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }] };
+            (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(fallbackConfig);
+
+            await command.execute({
+                configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
+            const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
+            expect(fs.existsSync(configPath)).toBe(false);
         });
     });
 });
