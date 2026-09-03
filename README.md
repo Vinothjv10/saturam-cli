@@ -94,8 +94,14 @@ Sync project onboarding documentation locally from Atlassian (Jira & Confluence)
 # Sync using local config file (.sateng/onboarding.json)
 sat-cli onboard
 
-# Sync directly from a Google Sheet URL or ID
+# Sync directly from a Google Sheet URL or ID — either a structured project sheet
+# (one row per project, see onboarding-sheet-template.csv) or a "sheet of links"
+# (cells scanned for Confluence/Jira/Drive URLs), auto-detected from the header row
 sat-cli onboard <spreadsheet-url-or-id>
+
+# Write a sample .sateng/onboarding.json (Confluence/Jira/Google Drive examples) to the
+# current directory, instead of syncing — never overwrites an existing onboarding.json
+sat-cli onboard --format
 
 # Override the output project folder name for every document fetched in this run
 # (e.g. onboarding/<project-name>/confluence/... instead of each config/tab-derived name)
@@ -119,7 +125,9 @@ sat-cli onboard --chat
 sat-cli onboard --chat --project "Saturam"
 ```
 
-For more details on onboarding sync configuration and features, see [ONBOARDING.md](ONBOARDING.md).
+Once you've synced from a structured project sheet, its ID is remembered in your personal config — plain `sat-cli onboard` (no argument, from any directory) automatically re-checks that same sheet for the latest values on every run, instead of relying on a possibly-stale local file. Passing an explicit config path always overrides this and loads that file directly.
+
+For more details on onboarding sync configuration and features — including the full structured-sheet column reference ([`onboarding-sheet-template.csv`](onboarding-sheet-template.csv)) — see [ONBOARDING.md](ONBOARDING.md).
 
 `--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
