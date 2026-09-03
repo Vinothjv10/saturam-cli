@@ -505,15 +505,17 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         });
 
-        it("writes the resolved config to .sateng/onboarding.json when the sheet is a structured project sheet", async () => {
-            const structuredConfig = {
-                confluence: { baseUrl: "https://saturam.atlassian.net" },
-                projects: { Saturam: { jira: { tickets: ["PROJ-1"] } } },
-            };
+        const SHEET_ID = "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg";
+        const structuredConfig = {
+            confluence: { baseUrl: "https://saturam.atlassian.net" },
+            projects: { Saturam: { jira: { tickets: ["PROJ-1"] } } },
+        };
+
+        it("writes the resolved config plus a _sourceGoogleSheetId marker when the sheet is a structured project sheet", async () => {
             (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(structuredConfig);
 
             await command.execute({
-                configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+                configOrSheet: SHEET_ID,
                 "project-name": undefined,
                 "upload-to-s3": undefined,
                 list: undefined,
@@ -523,16 +525,19 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
             expect(fs.existsSync(configPath)).toBe(true);
-            expect(JSON.parse(fs.readFileSync(configPath, "utf-8"))).toEqual(structuredConfig);
+            const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+            expect(written._sourceGoogleSheetId).toBe(SHEET_ID);
+            expect(written.confluence).toEqual(structuredConfig.confluence);
+            expect(written.projects).toEqual(structuredConfig.projects);
             expect(mockOnboardService.sync).toHaveBeenCalledWith(structuredConfig, expect.any(String), undefined);
         });
 
         it("does not write onboarding.json when the sheet has no project_name column (sheet-of-links fallback)", async () => {
-            const fallbackConfig = { onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }] };
+            const fallbackConfig = { onboardingSheets: [{ spreadsheetId: SHEET_ID }] };
             (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(fallbackConfig);
 
             await command.execute({
-                configOrSheet: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg",
+                configOrSheet: SHEET_ID,
                 "project-name": undefined,
                 "upload-to-s3": undefined,
                 list: undefined,
@@ -542,6 +547,58 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
             expect(fs.existsSync(configPath)).toBe(false);
+        });
+
+        it("re-checks the source sheet when 'sat-cli onboard' is run with no argument against a previously mirrored config", async () => {
+            const configDir = path.join(tmpDir, ".sateng");
+            fs.mkdirSync(configDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(configDir, "onboarding.json"),
+                JSON.stringify({ _sourceGoogleSheetId: SHEET_ID, projects: { Saturam: { jira: { tickets: ["OLD-1"] } } } }),
+            );
+
+            const freshConfig = {
+                confluence: { baseUrl: "https://saturam.atlassian.net" },
+                projects: { Saturam: { jira: { tickets: ["NEW-1", "NEW-2"] } } },
+            };
+            (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(freshConfig);
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
+            expect(mockOnboardService.resolveConfigFromSheet).toHaveBeenCalledWith(SHEET_ID);
+            expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
+            expect(mockOnboardService.sync).toHaveBeenCalledWith(freshConfig, expect.any(String), undefined);
+
+            const written = JSON.parse(fs.readFileSync(path.join(configDir, "onboarding.json"), "utf-8"));
+            expect(written.projects.Saturam.jira.tickets).toEqual(["NEW-1", "NEW-2"]);
+        });
+
+        it("loads onboarding.json as a plain local config when it has no _sourceGoogleSheetId marker", async () => {
+            const configDir = path.join(tmpDir, ".sateng");
+            fs.mkdirSync(configDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(configDir, "onboarding.json"),
+                JSON.stringify({ confluence: { baseUrl: "https://saturam.atlassian.net" } }),
+            );
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
+            expect(mockOnboardService.resolveConfigFromSheet).not.toHaveBeenCalled();
+            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(path.join(configDir, "onboarding.json"));
         });
     });
 });

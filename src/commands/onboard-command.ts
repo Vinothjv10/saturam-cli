@@ -1,5 +1,5 @@
 import { input } from "@inquirer/prompts";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { getLogger } from "log4js";
 import { Marked } from "marked";
 import { dirname, resolve } from "path";
@@ -7,7 +7,7 @@ import { Service } from "typedi";
 import { z } from "zod";
 import { BedrockKnowledgeBaseService } from "../integrations/aws/services/bedrock-knowledge-base.service";
 import { getKnowledgeBaseChatMessages } from "../prompts/knowledge-base-chat.prompt";
-import { ConfigService } from "../services/config-service";
+import { ConfigService, OnboardConfig } from "../services/config-service";
 import { LlmService } from "../services/llm-service";
 import { OnboardService } from "../services/onboarding/onboard.service";
 import { TypedCommand, TypedInputs } from "./base";
@@ -161,16 +161,24 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                 : arg;
 
             logger.info(`Running onboarding sync directly from Google Sheet ID: ${spreadsheetId}`);
-            const parsedConfig = await this.onboardService.resolveConfigFromSheet(spreadsheetId);
-            if (parsedConfig.projects && Object.keys(parsedConfig.projects).length > 0) {
-                this.saveResolvedConfig(parsedConfig, cwd);
-            }
-            const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
-            if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
+            await this.syncFromSheet(spreadsheetId, cwd, projectNameOverride, uploadToS3);
             return;
         }
 
         const configPath = arg ? resolve(arg) : resolve(cwd, ".sateng/onboarding.json");
+
+        // A config file previously mirrored from a structured Google Sheet (see saveResolvedConfig)
+        // carries a _sourceGoogleSheetId marker — re-check the sheet for the latest values on every
+        // run instead of trusting the possibly-stale local mirror. Deleting the marker (or hand-editing
+        // the file without it) detaches the file and it's treated as a plain local config again.
+        const sourceSheetId = this.readSourceSheetId(configPath);
+        if (sourceSheetId) {
+            logger.info(
+                `${configPath} was generated from Google Sheet ${sourceSheetId} — re-checking the sheet for the latest values...`,
+            );
+            await this.syncFromSheet(sourceSheetId, cwd, projectNameOverride, uploadToS3);
+            return;
+        }
 
         logger.info(`Loading onboarding configuration from: ${configPath}`);
         const parsedConfig = await this.configService.loadOnboardingConfig(configPath);
@@ -178,18 +186,54 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
     }
 
+    /** Resolves a structured project config from the given sheet, mirrors it locally, and syncs it. */
+    private async syncFromSheet(
+        spreadsheetId: string,
+        cwd: string,
+        projectNameOverride: string | undefined,
+        uploadToS3: boolean | undefined,
+    ): Promise<void> {
+        const parsedConfig = await this.onboardService.resolveConfigFromSheet(spreadsheetId);
+        if (parsedConfig.projects && Object.keys(parsedConfig.projects).length > 0) {
+            this.saveResolvedConfig(parsedConfig, cwd, spreadsheetId);
+        }
+        const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
+        if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
+    }
+
+    /** Reads the _sourceGoogleSheetId marker from a previously sheet-mirrored config file, if any. */
+    private readSourceSheetId(configPath: string): string | undefined {
+        if (!existsSync(configPath)) return undefined;
+        try {
+            const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+            return typeof raw?._sourceGoogleSheetId === "string" ? raw._sourceGoogleSheetId : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     /**
      * When syncing directly from a structured project sheet, mirrors the resolved config to
-     * .sateng/onboarding.json — refreshed on every run so it always reflects the sheet's latest
-     * state, and so the sheet-derived config can be inspected/diffed/edited locally like any
-     * other onboarding.json.
+     * .sateng/onboarding.json — refreshed on every run (including plain `sat-cli onboard` with
+     * no argument, via the _sourceGoogleSheetId marker — see readSourceSheetId) so it always
+     * reflects the sheet's latest state, and so the sheet-derived config can be
+     * inspected/diffed locally like any other onboarding.json.
      */
-    private saveResolvedConfig(config: unknown, cwd: string): void {
+    private saveResolvedConfig(config: OnboardConfig, cwd: string, sourceSheetId: string): void {
         const configDir = resolve(cwd, ".sateng");
         const targetPath = resolve(configDir, "onboarding.json");
+        const withSource = {
+            _comment:
+                "Auto-generated from a structured onboarding Google Sheet. Running 'sat-cli onboard' " +
+                "(with no argument) re-fetches the sheet and overwrites this file each time — edit the " +
+                "sheet, not this file. To detach and edit this file directly instead, delete the " +
+                "_sourceGoogleSheetId field below.",
+            _sourceGoogleSheetId: sourceSheetId,
+            ...config,
+        };
 
         mkdirSync(configDir, { recursive: true });
-        writeFileSync(targetPath, `${JSON.stringify(config, null, 4)}\n`, "utf-8");
+        writeFileSync(targetPath, `${JSON.stringify(withSource, null, 4)}\n`, "utf-8");
         logger.info(`Saved resolved onboarding config from Google Sheet to: ${targetPath}`);
     }
 
