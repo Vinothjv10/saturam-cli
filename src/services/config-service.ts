@@ -117,6 +117,13 @@ export const PersonalConfigurationSchema = z.object({
     atlassianEmail: z.string().optional().describe("Atlassian account email (Jira & Confluence)"),
     atlassianToken: z.string().optional().describe("Atlassian API token (Jira & Confluence)"),
     googleAccessToken: z.string().optional().describe("Google OAuth access token (Drive / Docs / Sheets)"),
+    onboardingSheetId: z
+        .string()
+        .optional()
+        .describe(
+            "Google Sheet ID of the last structured project sheet synced via 'sat-cli onboard <sheet-url>' — " +
+                "used by 'sat-cli onboard' (no argument) to re-check that sheet for the latest values on every run",
+        ),
     cloud: z
         .record(z.nativeEnum(CloudProvider), CloudProviderConfigSchema)
         .optional()
@@ -538,6 +545,18 @@ export class ConfigService {
         throw new Error(
             "No Google Access Token found. Set GOOGLE_ACCESS_TOKEN, or run 'sat-cli init' and select 'Google (Drive / Docs / Sheets)' to configure credentials.",
         );
+    }
+
+    // --- Onboarding Sheet Tracking (for 'sat-cli onboard' with no argument) ---
+
+    public async getOnboardingSheetId(): Promise<string | undefined> {
+        const config = await this.loadPersonalConfig();
+        return config.onboardingSheetId;
+    }
+
+    public async setOnboardingSheetId(spreadsheetId: string): Promise<void> {
+        const config = await this.loadPersonalConfig();
+        await this.savePersonalConfig({ ...config, onboardingSheetId: spreadsheetId });
     }
 
     // --- Cloud Provider Config (AWS/Azure/GCP: storage & retrieval) ---
