@@ -50,8 +50,10 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: "Gemini 2.5 Pro",
     [LLMModel.GEMINI_2_5_FLASH]: "Gemini 2.5 Flash",
-    [LLMModel.GEMINI_3_PRO]: "Gemini 3 Pro",
-    [LLMModel.GEMINI_3_FLASH]: "Gemini 3 Flash",
+    [LLMModel.GEMINI_3_1_PRO_PREVIEW]: "Gemini 3.1 Pro (preview)",
+    [LLMModel.GEMINI_3_5_FLASH]: "Gemini 3.5 Flash",
+    [LLMModel.GEMINI_3_6_FLASH]: "Gemini 3.6 Flash",
+    [LLMModel.GEMINI_3_7_FLASH]: "Gemini 3.7 Flash (latest)",
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: "GPT-4o",
     [LLMModel.OPENAI_GPT_5]: "GPT-5",

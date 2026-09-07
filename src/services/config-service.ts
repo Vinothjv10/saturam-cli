@@ -80,7 +80,22 @@ export const CloudProviderConfigSchema = z.object({
 
 export type CloudProviderConfig = z.infer<typeof CloudProviderConfigSchema>;
 
-const migrateModelId = (val: unknown) => (typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val);
+const KNOWN_MODEL_IDS = new Set<string>(Object.values(LLMModel));
+
+// A model ID saved by a previous CLI version can be retired by the provider (or renamed here)
+// after the fact. Falling back to undefined (rather than letting the enum check throw) means one
+// stale saved value degrades to "use the default model" instead of breaking config loading
+// entirely — every ConfigService method that touches personal/project/session config depends on
+// this parse succeeding.
+const migrateModelId = (val: unknown) => {
+    if (typeof val !== "string") return val;
+    const withoutRegionPrefix = val.replace(/^(us|eu|ap)\./, "");
+    if (!KNOWN_MODEL_IDS.has(withoutRegionPrefix)) {
+        logger.warn(`Unrecognized saved model ID "${val}" — ignoring it and falling back to the default model.`);
+        return undefined;
+    }
+    return withoutRegionPrefix;
+};
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
@@ -152,8 +167,10 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
     [AIProvider.GOOGLE]: [
         LLMModel.GEMINI_2_5_PRO,
         LLMModel.GEMINI_2_5_FLASH,
-        LLMModel.GEMINI_3_PRO,
-        LLMModel.GEMINI_3_FLASH,
+        LLMModel.GEMINI_3_1_PRO_PREVIEW,
+        LLMModel.GEMINI_3_5_FLASH,
+        LLMModel.GEMINI_3_6_FLASH,
+        LLMModel.GEMINI_3_7_FLASH,
     ],
     [AIProvider.OPENAI]: [
         LLMModel.OPENAI_GPT_4O,

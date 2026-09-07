@@ -22,11 +22,15 @@ export enum LLMModel {
     BEDROCK_CLAUDE_4_6_OPUS = "anthropic.claude-opus-4-6-v1",
     BEDROCK_NOVA_PRO = "amazon.nova-pro-v1:0",
 
-    // Google Gemini
+    // Google Gemini — verified current IDs against ai.google.dev/gemini-api/docs/models
+    // (2026-09). There is no stable non-preview "Pro" tier past 2.5 yet — gemini-3.1-pro-preview
+    // is the current best "Pro" option, still in preview.
     GEMINI_2_5_PRO = "gemini-2.5-pro",
     GEMINI_2_5_FLASH = "gemini-2.5-flash",
-    GEMINI_3_PRO = "gemini-3-pro",
-    GEMINI_3_FLASH = "gemini-3-flash",
+    GEMINI_3_1_PRO_PREVIEW = "gemini-3.1-pro-preview",
+    GEMINI_3_5_FLASH = "gemini-3.5-flash",
+    GEMINI_3_6_FLASH = "gemini-3.6-flash",
+    GEMINI_3_7_FLASH = "gemini-3.7-flash",
 
     // OpenAI
     OPENAI_GPT_4O = "gpt-4o",
@@ -89,8 +93,10 @@ export const MODEL_CONTEXT_WINDOWS: Record<LLMModel, number> = {
     // Gemini
     [LLMModel.GEMINI_2_5_PRO]: 1000000,
     [LLMModel.GEMINI_2_5_FLASH]: 1000000,
-    [LLMModel.GEMINI_3_PRO]: 1000000,
-    [LLMModel.GEMINI_3_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_1_PRO_PREVIEW]: 1000000,
+    [LLMModel.GEMINI_3_5_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_6_FLASH]: 1000000,
+    [LLMModel.GEMINI_3_7_FLASH]: 1000000,
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: 128000,
     [LLMModel.OPENAI_GPT_5]: 128000,
@@ -150,8 +156,10 @@ const BEDROCK_MODELS = new Set([
 const GEMINI_MODELS = new Set([
     LLMModel.GEMINI_2_5_PRO,
     LLMModel.GEMINI_2_5_FLASH,
-    LLMModel.GEMINI_3_PRO,
-    LLMModel.GEMINI_3_FLASH,
+    LLMModel.GEMINI_3_1_PRO_PREVIEW,
+    LLMModel.GEMINI_3_5_FLASH,
+    LLMModel.GEMINI_3_6_FLASH,
+    LLMModel.GEMINI_3_7_FLASH,
 ]);
 const OPENAI_MODELS = new Set([
     LLMModel.OPENAI_GPT_4O,

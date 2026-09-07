@@ -146,13 +146,33 @@ describe("ConfigService Onboarding Credentials", () => {
 
     describe("model ID normalization (PersonalConfigurationSchema)", () => {
         it("leaves a current model ID untouched", () => {
-            const parsed = PersonalConfigurationSchema.parse({ defaultModel: LLMModel.GEMINI_3_PRO });
-            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_PRO);
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: LLMModel.GEMINI_3_1_PRO_PREVIEW });
+            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_1_PRO_PREVIEW);
         });
 
         it("still strips region prefixes for Bedrock model IDs", () => {
             const parsed = PersonalConfigurationSchema.parse({ defaultModel: "us.anthropic.claude-opus-4-6-v1" });
             expect(parsed.defaultModel).toBe(LLMModel.BEDROCK_CLAUDE_4_6_OPUS);
+        });
+
+        it("falls back to undefined instead of throwing when a saved model ID is no longer recognized", () => {
+            // A retired/renamed model ID must not break the entire config parse — every
+            // ConfigService method that reads personal/project/session config depends on it.
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: "some-retired-model-id" });
+            expect(parsed.defaultModel).toBeUndefined();
+        });
+
+        it("accepts every currently-valid Gemini model ID", () => {
+            for (const model of [
+                LLMModel.GEMINI_2_5_PRO,
+                LLMModel.GEMINI_2_5_FLASH,
+                LLMModel.GEMINI_3_1_PRO_PREVIEW,
+                LLMModel.GEMINI_3_5_FLASH,
+                LLMModel.GEMINI_3_6_FLASH,
+                LLMModel.GEMINI_3_7_FLASH,
+            ]) {
+                expect(PersonalConfigurationSchema.parse({ defaultModel: model }).defaultModel).toBe(model);
+            }
         });
     });
 
