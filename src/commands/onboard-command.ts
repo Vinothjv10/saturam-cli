@@ -1,15 +1,15 @@
 import { input } from "@inquirer/prompts";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { getLogger } from "log4js";
 import { Marked } from "marked";
-import { dirname, resolve } from "path";
 import { Service } from "typedi";
 import { z } from "zod";
 import { BedrockKnowledgeBaseService } from "../integrations/aws/services/bedrock-knowledge-base.service";
 import { getKnowledgeBaseChatMessages } from "../prompts/knowledge-base-chat.prompt";
 import { ConfigService, OnboardConfig } from "../services/config-service";
 import { LlmService } from "../services/llm-service";
+import { OnboardingConfigService } from "../services/onboarding/onboarding-config.service";
 import { OnboardService } from "../services/onboarding/onboard.service";
+import { WorkingDirectory } from "../utils/working-directory";
 import { TypedCommand, TypedInputs } from "./base";
 
 const logger = getLogger("OnboardCommand");
@@ -70,46 +70,19 @@ const INPUTS = [
             "Write a sample .sateng/onboarding.json config (with example Confluence, Jira, and Google Drive entries) to the current directory, instead of syncing",
         schema: z.boolean().optional(),
     },
+    {
+        name: "forget-sheet",
+        description:
+            "Forget the remembered onboarding Google Sheet (see: last synced sheet re-checked by plain 'sat-cli onboard'), instead of syncing",
+        schema: z.boolean().optional(),
+    },
+    {
+        name: "force",
+        description:
+            "When syncing from a Google Sheet, overwrite .sateng/onboarding.json even if it wasn't itself generated from a sheet",
+        schema: z.boolean().optional(),
+    },
 ] as const;
-
-const ONBOARDING_CONFIG_TEMPLATE = {
-    _comment: "This is a configuration template for project onboarding. Replace placeholders with actual values.",
-    confluence: {
-        baseUrl: "https://your-domain.atlassian.net",
-    },
-    jira: {
-        baseUrl: "https://your-domain.atlassian.net",
-    },
-    projects: {
-        ExampleProject: {
-            confluence: {
-                _comment: "'pages' accepts Confluence page IDs (as strings). 'space' syncs every page in that space key.",
-                pages: ["123456789"],
-                space: "PROJ",
-            },
-            jira: {
-                _comment: "'tickets' accepts Jira issue keys. Use 'jql' instead to sync all issues matching a query.",
-                tickets: ["PROJ-123"],
-            },
-            googleDocs: {
-                _comment: "'docs' accepts Google Docs/Sheets/.docx file IDs from the file's Google Drive URL.",
-                docs: ["your-google-doc-id-here"],
-            },
-            googleSheets: {
-                _comment: "A single Google Sheet to sync as structured data. 'range' is optional (A1 notation).",
-                spreadsheetId: "your-google-sheet-id-here",
-                range: "Sheet1!A1:E100",
-            },
-            onboardingSheets: [
-                {
-                    _comment:
-                        "A Google Sheet whose cells contain Confluence/Jira/Drive links to resolve and sync automatically.",
-                    spreadsheetId: "your-onboarding-links-sheet-id-here",
-                },
-            ],
-        },
-    },
-};
 
 @Service()
 export class OnboardCommand implements TypedCommand<typeof INPUTS> {
@@ -123,13 +96,15 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
     constructor(
         private readonly onboardService: OnboardService,
         private readonly configService: ConfigService,
+        private readonly onboardingConfig: OnboardingConfigService,
         private readonly knowledgeBase: BedrockKnowledgeBaseService,
         private readonly llmService: LlmService,
+        private readonly dir: WorkingDirectory,
     ) {}
 
     public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
         if (inputs.format) {
-            this.writeSampleConfig();
+            this.onboardingConfig.writeSampleConfig();
             return;
         }
 
@@ -148,113 +123,93 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             return;
         }
 
-        const cwd = process.env.SATENG_ORIGINAL_CWD ?? process.cwd();
-        const arg = inputs.configOrSheet;
-        const projectNameOverride = inputs["project-name"];
-        const uploadToS3 = inputs["upload-to-s3"];
-
-        const isGoogleSheet = arg && (arg.includes("docs.google.com/spreadsheets") || /^[a-zA-Z0-9-_]{44}$/.test(arg));
-
-        if (isGoogleSheet) {
-            const spreadsheetId = arg.includes("docs.google.com/spreadsheets")
-                ? arg.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1] || arg
-                : arg;
-
-            logger.info(`Running onboarding sync directly from Google Sheet ID: ${spreadsheetId}`);
-            await this.syncFromSheet(spreadsheetId, cwd, projectNameOverride, uploadToS3);
+        if (inputs["forget-sheet"]) {
+            await this.configService.setOnboardingSheetId(undefined);
+            logger.info("Forgot the remembered onboarding Google Sheet.");
             return;
         }
 
-        // No config path or sheet was given — if a previous run resolved a structured project
-        // sheet (see syncFromSheet), re-check that same sheet for the latest values on every run
-        // instead of reading a possibly-stale local file. This is tracked in the personal config
-        // (not a local .sateng/onboarding.json marker) so it applies no matter which directory
-        // 'sat-cli onboard' is run from. Passing an explicit config path always overrides this.
-        if (!arg) {
+        const arg = inputs.configOrSheet;
+        const projectNameOverride = inputs["project-name"];
+        const uploadToS3 = inputs["upload-to-s3"];
+        const force = inputs.force;
+
+        const sheetId = arg ? this.onboardingConfig.parseSheetArg(arg) : null;
+        if (sheetId) {
+            logger.info(`Running onboarding sync directly from Google Sheet ID: ${sheetId}`);
+            await this.syncFromSheet(sheetId, projectNameOverride, uploadToS3, force);
+            return;
+        }
+
+        // Explicit arg always wins. Otherwise: a local .sateng/onboarding.json takes precedence
+        // over a remembered sheet (so a hand-written config in one repo is never shadowed by a
+        // sheet synced from a different, unrelated repo) — only fall back to the remembered sheet
+        // when there's no local file to use, and fall back again to the local file (if any) if the
+        // remembered sheet's sync fails (e.g. an expired Google token, or the sheet was deleted).
+        if (!arg && !this.onboardingConfig.localConfigExists()) {
             const rememberedSheetId = await this.configService.getOnboardingSheetId();
             if (rememberedSheetId) {
                 logger.info(
                     `Using the last synced onboarding Google Sheet (${rememberedSheetId}) — re-checking it for the latest values...`,
                 );
-                await this.syncFromSheet(rememberedSheetId, cwd, projectNameOverride, uploadToS3);
-                return;
+                try {
+                    await this.syncFromSheet(rememberedSheetId, projectNameOverride, uploadToS3, force);
+                    return;
+                } catch (err) {
+                    logger.warn(
+                        `Failed to sync the remembered onboarding sheet: ${(err as Error).message}. No local .sateng/onboarding.json to fall back to.`,
+                    );
+                    throw err;
+                }
             }
         }
 
-        const configPath = arg ? resolve(arg) : resolve(cwd, ".sateng/onboarding.json");
+        const configPath = arg ? this.onboardingConfig.resolveConfigArgPath(arg) : this.onboardingConfig.configPath;
 
         logger.info(`Loading onboarding configuration from: ${configPath}`);
         const parsedConfig = await this.configService.loadOnboardingConfig(configPath);
-        const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
+        await this.runSync(parsedConfig, projectNameOverride, uploadToS3);
+    }
+
+    /** Runs sync() + optional S3 upload, and fails the process (non-zero exit) if every document failed. */
+    private async runSync(
+        parsedConfig: OnboardConfig,
+        projectNameOverride: string | undefined,
+        uploadToS3: boolean | undefined,
+    ): Promise<void> {
+        const { filesWritten, fetched, failed } = await this.onboardService.sync(
+            parsedConfig,
+            this.dir.cwd,
+            projectNameOverride,
+        );
         if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
+
+        if (failed > 0 && fetched === 0) {
+            logger.error(`All ${failed} document(s) failed to sync.`);
+            process.exitCode = 1;
+        }
     }
 
     /**
      * Resolves a structured project config from the given sheet, mirrors it to
      * .sateng/onboarding.json for local inspection, remembers the sheet ID in the personal
-     * config so a later plain `sat-cli onboard` re-checks it, and syncs it.
+     * config so a later plain `sat-cli onboard` re-checks it, and syncs it. The mirror is only
+     * saved and the sheet only remembered after a successful sync, so a failed first sync never
+     * installs an override that then shadows a local config on future runs.
      */
     private async syncFromSheet(
         spreadsheetId: string,
-        cwd: string,
         projectNameOverride: string | undefined,
         uploadToS3: boolean | undefined,
+        force: boolean | undefined,
     ): Promise<void> {
         const parsedConfig = await this.onboardService.resolveConfigFromSheet(spreadsheetId);
+        await this.runSync(parsedConfig, projectNameOverride, uploadToS3);
+
         if (parsedConfig.projects && Object.keys(parsedConfig.projects).length > 0) {
-            this.saveResolvedConfig(parsedConfig, cwd, spreadsheetId);
+            this.onboardingConfig.saveResolvedConfig(parsedConfig, spreadsheetId, force);
             await this.configService.setOnboardingSheetId(spreadsheetId);
         }
-        const { filesWritten } = await this.onboardService.sync(parsedConfig, cwd, projectNameOverride);
-        if (uploadToS3) await this.onboardService.uploadToS3(filesWritten);
-    }
-
-    /**
-     * When syncing directly from a structured project sheet, mirrors the resolved config to
-     * .sateng/onboarding.json — refreshed on every run (including plain `sat-cli onboard` with
-     * no argument, via the _sourceGoogleSheetId marker — see readSourceSheetId) so it always
-     * reflects the sheet's latest state, and so the sheet-derived config can be
-     * inspected/diffed locally like any other onboarding.json.
-     */
-    private saveResolvedConfig(config: OnboardConfig, cwd: string, sourceSheetId: string): void {
-        const configDir = resolve(cwd, ".sateng");
-        const targetPath = resolve(configDir, "onboarding.json");
-        const withSource = {
-            _comment:
-                "Auto-generated from a structured onboarding Google Sheet, for local inspection only. " +
-                "Running 'sat-cli onboard' (with no argument, from any directory) re-fetches this sheet " +
-                "(remembered in your personal config — see sat-cli init) and overwrites this file each " +
-                "time — edit the sheet, not this file.",
-            _sourceGoogleSheetId: sourceSheetId,
-            ...config,
-        };
-
-        mkdirSync(configDir, { recursive: true });
-        writeFileSync(targetPath, `${JSON.stringify(withSource, null, 4)}\n`, "utf-8");
-        logger.info(`Saved resolved onboarding config from Google Sheet to: ${targetPath}`);
-    }
-
-    /**
-     * Writes a sample .sateng/onboarding.json to the current directory so users can see
-     * how to structure Confluence, Jira, and Google Drive (Docs/Sheets) entries. Never
-     * overwrites an existing onboarding.json — writes alongside it as onboarding.sample.json
-     * instead.
-     */
-    private writeSampleConfig(): void {
-        const cwd = process.env.SATENG_ORIGINAL_CWD ?? process.cwd();
-        const configDir = resolve(cwd, ".sateng");
-        const targetPath = resolve(configDir, "onboarding.json");
-        const outputPath = existsSync(targetPath) ? resolve(configDir, "onboarding.sample.json") : targetPath;
-
-        mkdirSync(configDir, { recursive: true });
-        writeFileSync(outputPath, `${JSON.stringify(ONBOARDING_CONFIG_TEMPLATE, null, 4)}\n`, "utf-8");
-
-        if (outputPath !== targetPath) {
-            logger.info(`.sateng/onboarding.json already exists — wrote sample config to: ${outputPath}`);
-        } else {
-            logger.info(`Sample onboarding config written to: ${outputPath}`);
-        }
-        logger.info("Edit it with your Confluence/Jira/Google Drive IDs, then run 'sat-cli onboard' to sync.");
     }
 
     private static readonly KB_EXIT_COMMANDS = new Set(["exit", "quit", ":q"]);

@@ -144,27 +144,10 @@ describe("ConfigService Onboarding Credentials", () => {
         });
     });
 
-    describe("retired model ID migration (PersonalConfigurationSchema)", () => {
-        it("migrates a retired Gemini defaultModel to its current replacement", () => {
-            const parsed = PersonalConfigurationSchema.parse({ defaultModel: "gemini-2.5-flash" });
-            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_7_FLASH);
-        });
-
-        it("migrates gemini-2.5-pro and the older gemini-3-pro/gemini-3-flash IDs", () => {
-            expect(PersonalConfigurationSchema.parse({ defaultModel: "gemini-2.5-pro" }).defaultModel).toBe(
-                LLMModel.GEMINI_3_1_PRO,
-            );
-            expect(PersonalConfigurationSchema.parse({ defaultModel: "gemini-3-pro" }).defaultModel).toBe(
-                LLMModel.GEMINI_3_1_PRO,
-            );
-            expect(PersonalConfigurationSchema.parse({ defaultModel: "gemini-3-flash" }).defaultModel).toBe(
-                LLMModel.GEMINI_3_7_FLASH,
-            );
-        });
-
+    describe("model ID normalization (PersonalConfigurationSchema)", () => {
         it("leaves a current model ID untouched", () => {
-            const parsed = PersonalConfigurationSchema.parse({ defaultModel: LLMModel.GEMINI_3_6_FLASH });
-            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_6_FLASH);
+            const parsed = PersonalConfigurationSchema.parse({ defaultModel: LLMModel.GEMINI_3_PRO });
+            expect(parsed.defaultModel).toBe(LLMModel.GEMINI_3_PRO);
         });
 
         it("still strips region prefixes for Bedrock model IDs", () => {

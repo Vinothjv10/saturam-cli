@@ -1,12 +1,11 @@
 import { input } from "@inquirer/prompts";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import { OnboardCommand } from "../../src/commands/onboard-command";
 import { OnboardService } from "../../src/services/onboarding/onboard.service";
 import { ConfigService } from "../../src/services/config-service";
+import { OnboardingConfigService } from "../../src/services/onboarding/onboarding-config.service";
 import { BedrockKnowledgeBaseService } from "../../src/integrations/aws/services/bedrock-knowledge-base.service";
 import { LlmService } from "../../src/services/llm-service";
+import { WorkingDirectory } from "../../src/utils/working-directory";
 
 jest.mock("@inquirer/prompts", () => ({
     input: jest.fn(),
@@ -16,13 +15,15 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     let command: OnboardCommand;
     let mockOnboardService: jest.Mocked<OnboardService>;
     let mockConfigService: jest.Mocked<ConfigService>;
+    let mockOnboardingConfig: jest.Mocked<OnboardingConfigService>;
     let mockKnowledgeBase: jest.Mocked<BedrockKnowledgeBaseService>;
     let mockLlmService: jest.Mocked<LlmService>;
+    let dir: WorkingDirectory;
 
     beforeEach(() => {
         jest.clearAllMocks();
         mockOnboardService = {
-            sync: jest.fn().mockResolvedValue({ filesWritten: [] }),
+            sync: jest.fn().mockResolvedValue({ filesWritten: [], fetched: 1, failed: 0 }),
             uploadToS3: jest.fn().mockResolvedValue({ uploaded: 0, skipped: 0, failed: 0 }),
             listSyncedDocuments: jest.fn().mockResolvedValue(undefined),
             resolveConfigFromSheet: jest
@@ -41,6 +42,20 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             setOnboardingSheetId: jest.fn().mockResolvedValue(undefined),
         } as any;
 
+        mockOnboardingConfig = {
+            configPath: "/mock/repo/.sateng/onboarding.json",
+            localConfigExists: jest.fn().mockReturnValue(false),
+            resolveConfigArgPath: jest.fn().mockImplementation((arg: string) => `/mock/cwd/${arg}`),
+            parseSheetArg: jest.fn().mockImplementation((arg: string) => {
+                if (arg.includes("docs.google.com/spreadsheets")) {
+                    return arg.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1] ?? null;
+                }
+                return /^[a-zA-Z0-9-_]{44}$/.test(arg) ? arg : null;
+            }),
+            saveResolvedConfig: jest.fn(),
+            writeSampleConfig: jest.fn(),
+        } as any;
+
         mockKnowledgeBase = {
             retrieve: jest.fn().mockResolvedValue([]),
         } as any;
@@ -49,7 +64,16 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             prompt: jest.fn().mockResolvedValue("Here is the answer."),
         } as any;
 
-        command = new OnboardCommand(mockOnboardService, mockConfigService, mockKnowledgeBase, mockLlmService);
+        dir = new WorkingDirectory("/mock/cwd", "/mock/cli", "/mock/repo");
+
+        command = new OnboardCommand(
+            mockOnboardService,
+            mockConfigService,
+            mockOnboardingConfig,
+            mockKnowledgeBase,
+            mockLlmService,
+            dir,
+        );
     });
 
     it("should route to Google Sheet mode when passed a Google Sheets URL", async () => {
@@ -66,7 +90,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             {
                 onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }],
             },
-            expect.any(String),
+            dir.cwd,
             undefined,
         );
     });
@@ -85,7 +109,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             {
                 onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }],
             },
-            expect.any(String),
+            dir.cwd,
             undefined,
         );
     });
@@ -100,14 +124,12 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             chat: undefined,
         });
 
-        expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(
-            expect.stringContaining(".sateng/onboarding.json"),
-        );
+        expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(mockOnboardingConfig.configPath);
         expect(mockOnboardService.sync).toHaveBeenCalledWith(
             {
                 confluence: { baseUrl: "https://saturam.atlassian.net" },
             },
-            expect.any(String),
+            dir.cwd,
             undefined,
         );
     });
@@ -126,7 +148,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             {
                 confluence: { baseUrl: "https://saturam.atlassian.net" },
             },
-            expect.any(String),
+            dir.cwd,
             "custom-project",
         );
     });
@@ -145,7 +167,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             {
                 onboardingSheets: [{ spreadsheetId: "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg" }],
             },
-            expect.any(String),
+            dir.cwd,
             "custom-project",
         );
     });
@@ -157,7 +179,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 metadataAttributes: { title: "Doc", category: "google-docs", project: "saturam" },
             },
         ];
-        (mockOnboardService.sync as jest.Mock).mockResolvedValue({ filesWritten });
+        (mockOnboardService.sync as jest.Mock).mockResolvedValue({ filesWritten, fetched: 1, failed: 0 });
 
         await command.execute({
             configOrSheet: undefined,
@@ -182,6 +204,23 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         });
 
         expect(mockOnboardService.uploadToS3).not.toHaveBeenCalled();
+    });
+
+    it("sets a non-zero exit code when every document fails to sync", async () => {
+        const originalExitCode = process.exitCode;
+        (mockOnboardService.sync as jest.Mock).mockResolvedValue({ filesWritten: [], fetched: 0, failed: 3 });
+
+        await command.execute({
+            configOrSheet: undefined,
+            "project-name": undefined,
+            "upload-to-s3": undefined,
+            list: undefined,
+            "knowledge-base": undefined,
+            chat: undefined,
+        });
+
+        expect(process.exitCode).toBe(1);
+        process.exitCode = originalExitCode;
     });
 
     it("should route to listSyncedDocuments and skip syncing when --list is passed", async () => {
@@ -437,83 +476,31 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     });
 
     describe("--format sample config generation", () => {
-        let tmpDir: string;
-        let originalCwdEnv: string | undefined;
-
-        beforeEach(() => {
-            tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sateng-onboard-format-"));
-            originalCwdEnv = process.env.SATENG_ORIGINAL_CWD;
-            process.env.SATENG_ORIGINAL_CWD = tmpDir;
-        });
-
-        afterEach(() => {
-            if (originalCwdEnv === undefined) {
-                delete process.env.SATENG_ORIGINAL_CWD;
-            } else {
-                process.env.SATENG_ORIGINAL_CWD = originalCwdEnv;
-            }
-            fs.rmSync(tmpDir, { recursive: true, force: true });
-        });
-
-        it("writes a sample onboarding.json with Confluence, Jira, and Google Drive entries, and skips syncing", async () => {
+        it("delegates to OnboardingConfigService and skips syncing", async () => {
             await command.execute({ format: true } as any);
 
-            const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
-            expect(fs.existsSync(configPath)).toBe(true);
-
-            const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-            expect(written.confluence.baseUrl).toBeTruthy();
-            expect(written.jira.baseUrl).toBeTruthy();
-            expect(written.projects.ExampleProject.confluence.pages).toEqual(["123456789"]);
-            expect(written.projects.ExampleProject.jira.tickets).toEqual(["PROJ-123"]);
-            expect(written.projects.ExampleProject.googleDocs.docs).toEqual(["your-google-doc-id-here"]);
-            expect(written.projects.ExampleProject.googleSheets.spreadsheetId).toBe("your-google-sheet-id-here");
-
+            expect(mockOnboardingConfig.writeSampleConfig).toHaveBeenCalledTimes(1);
             expect(mockOnboardService.sync).not.toHaveBeenCalled();
         });
+    });
 
-        it("does not overwrite an existing onboarding.json, writing onboarding.sample.json instead", async () => {
-            const configDir = path.join(tmpDir, ".sateng");
-            fs.mkdirSync(configDir, { recursive: true });
-            const existingPath = path.join(configDir, "onboarding.json");
-            fs.writeFileSync(existingPath, JSON.stringify({ confluence: { baseUrl: "https://existing" } }));
+    describe("--forget-sheet", () => {
+        it("clears the remembered onboarding sheet and skips syncing", async () => {
+            await command.execute({ "forget-sheet": true } as any);
 
-            await command.execute({ format: true } as any);
-
-            const existingAfter = JSON.parse(fs.readFileSync(existingPath, "utf-8"));
-            expect(existingAfter.confluence.baseUrl).toBe("https://existing");
-
-            const samplePath = path.join(configDir, "onboarding.sample.json");
-            expect(fs.existsSync(samplePath)).toBe(true);
+            expect(mockConfigService.setOnboardingSheetId).toHaveBeenCalledWith(undefined);
+            expect(mockOnboardService.sync).not.toHaveBeenCalled();
         });
     });
 
     describe("Google Sheet mode — mirroring the resolved config to onboarding.json", () => {
-        let tmpDir: string;
-        let originalCwdEnv: string | undefined;
-
-        beforeEach(() => {
-            tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sateng-onboard-sheet-"));
-            originalCwdEnv = process.env.SATENG_ORIGINAL_CWD;
-            process.env.SATENG_ORIGINAL_CWD = tmpDir;
-        });
-
-        afterEach(() => {
-            if (originalCwdEnv === undefined) {
-                delete process.env.SATENG_ORIGINAL_CWD;
-            } else {
-                process.env.SATENG_ORIGINAL_CWD = originalCwdEnv;
-            }
-            fs.rmSync(tmpDir, { recursive: true, force: true });
-        });
-
         const SHEET_ID = "1JIUzDWt7QghYyaNTY_KyDBe1GB7iV_TzNnFBjA3oawg";
         const structuredConfig = {
             confluence: { baseUrl: "https://saturam.atlassian.net" },
             projects: { Saturam: { jira: { tickets: ["PROJ-1"] } } },
         };
 
-        it("writes the resolved config plus a _sourceGoogleSheetId marker, and remembers the sheet ID in the personal config", async () => {
+        it("syncs first, then mirrors the resolved config and remembers the sheet ID only after a successful sync", async () => {
             (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(structuredConfig);
 
             await command.execute({
@@ -525,17 +512,17 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 chat: undefined,
             });
 
-            const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
-            expect(fs.existsSync(configPath)).toBe(true);
-            const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-            expect(written._sourceGoogleSheetId).toBe(SHEET_ID);
-            expect(written.confluence).toEqual(structuredConfig.confluence);
-            expect(written.projects).toEqual(structuredConfig.projects);
-            expect(mockOnboardService.sync).toHaveBeenCalledWith(structuredConfig, expect.any(String), undefined);
+            expect(mockOnboardService.sync).toHaveBeenCalledWith(structuredConfig, dir.cwd, undefined);
+            expect(mockOnboardingConfig.saveResolvedConfig).toHaveBeenCalledWith(structuredConfig, SHEET_ID, undefined);
             expect(mockConfigService.setOnboardingSheetId).toHaveBeenCalledWith(SHEET_ID);
+
+            // Ordering: sync() happens before the mirror/remember, so a failed sync never installs one.
+            const syncOrder = (mockOnboardService.sync as jest.Mock).mock.invocationCallOrder[0];
+            const saveOrder = (mockOnboardingConfig.saveResolvedConfig as jest.Mock).mock.invocationCallOrder[0];
+            expect(syncOrder).toBeLessThan(saveOrder);
         });
 
-        it("does not write onboarding.json or remember the sheet ID when the sheet has no project_name column (sheet-of-links fallback)", async () => {
+        it("does not mirror onboarding.json or remember the sheet ID when the sheet has no project_name column (sheet-of-links fallback)", async () => {
             const fallbackConfig = { onboardingSheets: [{ spreadsheetId: SHEET_ID }] };
             (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(fallbackConfig);
 
@@ -548,13 +535,32 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 chat: undefined,
             });
 
-            const configPath = path.join(tmpDir, ".sateng", "onboarding.json");
-            expect(fs.existsSync(configPath)).toBe(false);
+            expect(mockOnboardingConfig.saveResolvedConfig).not.toHaveBeenCalled();
             expect(mockConfigService.setOnboardingSheetId).not.toHaveBeenCalled();
         });
 
-        it("re-checks the remembered sheet (from the personal config) when 'sat-cli onboard' is run with no argument", async () => {
+        it("does not mirror or remember the sheet ID when the sync fails", async () => {
+            (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(structuredConfig);
+            (mockOnboardService.sync as jest.Mock).mockRejectedValue(new Error("network error"));
+
+            await expect(
+                command.execute({
+                    configOrSheet: SHEET_ID,
+                    "project-name": undefined,
+                    "upload-to-s3": undefined,
+                    list: undefined,
+                    "knowledge-base": undefined,
+                    chat: undefined,
+                }),
+            ).rejects.toThrow("network error");
+
+            expect(mockOnboardingConfig.saveResolvedConfig).not.toHaveBeenCalled();
+            expect(mockConfigService.setOnboardingSheetId).not.toHaveBeenCalled();
+        });
+
+        it("re-checks the remembered sheet (from the personal config) when 'sat-cli onboard' is run with no argument and no local config exists", async () => {
             (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
+            (mockOnboardingConfig.localConfigExists as jest.Mock).mockReturnValue(false);
             const freshConfig = {
                 confluence: { baseUrl: "https://saturam.atlassian.net" },
                 projects: { Saturam: { jira: { tickets: ["NEW-1", "NEW-2"] } } },
@@ -572,23 +578,15 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             expect(mockOnboardService.resolveConfigFromSheet).toHaveBeenCalledWith(SHEET_ID);
             expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
-            expect(mockOnboardService.sync).toHaveBeenCalledWith(freshConfig, expect.any(String), undefined);
-
-            const written = JSON.parse(
-                fs.readFileSync(path.join(tmpDir, ".sateng", "onboarding.json"), "utf-8"),
-            );
-            expect(written.projects.Saturam.jira.tickets).toEqual(["NEW-1", "NEW-2"]);
+            expect(mockOnboardService.sync).toHaveBeenCalledWith(freshConfig, dir.cwd, undefined);
         });
 
-        it("does not re-check a remembered sheet when an explicit config path is passed, even if one is remembered", async () => {
+        it("prefers an existing local .sateng/onboarding.json over a remembered sheet", async () => {
             (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
-            const configDir = path.join(tmpDir, ".sateng");
-            fs.mkdirSync(configDir, { recursive: true });
-            const explicitPath = path.join(tmpDir, "custom-onboarding.json");
-            fs.writeFileSync(explicitPath, JSON.stringify({ confluence: { baseUrl: "https://saturam.atlassian.net" } }));
+            (mockOnboardingConfig.localConfigExists as jest.Mock).mockReturnValue(true);
 
             await command.execute({
-                configOrSheet: explicitPath,
+                configOrSheet: undefined,
                 "project-name": undefined,
                 "upload-to-s3": undefined,
                 list: undefined,
@@ -597,7 +595,23 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             });
 
             expect(mockOnboardService.resolveConfigFromSheet).not.toHaveBeenCalled();
-            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(explicitPath);
+            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(mockOnboardingConfig.configPath);
+        });
+
+        it("does not re-check a remembered sheet when an explicit config path is passed, even if one is remembered", async () => {
+            (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
+
+            await command.execute({
+                configOrSheet: "./custom-onboarding.json",
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
+            expect(mockOnboardService.resolveConfigFromSheet).not.toHaveBeenCalled();
+            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith("/mock/cwd/./custom-onboarding.json");
         });
 
         it("loads .sateng/onboarding.json as a plain local config when no sheet ID is remembered", async () => {
@@ -613,9 +627,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             });
 
             expect(mockOnboardService.resolveConfigFromSheet).not.toHaveBeenCalled();
-            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(
-                path.join(tmpDir, ".sateng", "onboarding.json"),
-            );
+            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(mockOnboardingConfig.configPath);
         });
     });
 });

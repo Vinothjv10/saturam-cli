@@ -20,7 +20,12 @@ describe("Cli hyphenated option mapping", () => {
             category: "common",
             aliases: [],
             inputs: [
-                { name: "configOrSheet", description: "config or sheet", schema: z.string().optional(), argument: true },
+                {
+                    name: "configOrSheet",
+                    description: "config or sheet",
+                    schema: z.string().optional(),
+                    argument: true,
+                },
                 { name: "project-name", description: "project name override", schema: z.string().optional() },
             ],
             execute,

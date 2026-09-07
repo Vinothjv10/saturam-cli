@@ -95,6 +95,8 @@ describe("OnboardService", () => {
                 content: "# Title\n",
                 url: `https://docs.google.com/spreadsheets/d/${id}`,
                 metadata: { updatedAt: "2026-07-01" },
+                sheetRows: [["header1"], ["row1"]],
+                sheetRange: options?.range ?? "Sheet1",
             })),
         } as any;
 
@@ -386,22 +388,13 @@ describe("OnboardService", () => {
                     range: "Sheet1!A:E",
                 },
             };
-            const mockMeta = {
-                spreadsheetId: "sheet-id-abc",
-                title: "Spreadsheet Title",
-                sheets: [{ properties: { title: "Sheet1" } }],
-            } as any;
-            mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue(mockMeta);
-            mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
-                valueRanges: [{ range: "Sheet1!A:E", values: [["header1"], ["row1"]] }],
-            });
-
             await service.sync(config, "/mock/cwd");
 
-            expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("sheet-id-abc");
-            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("sheet-id-abc", ["Sheet1!A:E"]);
+            expect(mockGoogleSheetsSource.fetch).toHaveBeenCalledWith("sheet-id-abc", { range: "Sheet1!A:E" });
             expect(mkdir).toHaveBeenCalled();
-            expect(writeFile).toHaveBeenCalled();
+            // Writes both the Markdown (uploaded/ingested content) and the JSON sidecar (local only).
+            expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/\.md$/), "# Title\n", "utf8");
+            expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/\.json$/), expect.any(String), "utf8");
         });
     });
 
@@ -494,10 +487,7 @@ describe("OnboardService", () => {
                 "LinksSheet!A:B",
             ]);
 
-            expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("another-nested-sheet-id");
-            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("another-nested-sheet-id", [
-                "Sheet1",
-            ]);
+            expect(mockGoogleSheetsSource.fetch).toHaveBeenCalledWith("another-nested-sheet-id", { range: undefined });
 
             expect(mockJiraSource.fetch).toHaveBeenCalledWith("DB-826", { baseUrl: "https://saturam.atlassian.net" });
             expect(mockConfluenceSource.fetch).toHaveBeenCalledWith("231145593", {
@@ -675,13 +665,14 @@ describe("OnboardService", () => {
             );
         });
 
-        it("skips both content and metadata sidecar for files that already exist in S3", async () => {
+        it("re-uploads content and metadata sidecar even if the key already exists in S3, so edits are never frozen out", async () => {
             (mockS3.objectExists as jest.Mock).mockResolvedValue(true);
+            (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
 
             const result = await service.uploadToS3(files);
 
-            expect(result).toEqual({ uploaded: 0, skipped: 2, failed: 0 });
-            expect(mockS3.putObject).not.toHaveBeenCalled();
+            expect(result).toEqual({ uploaded: 2, skipped: 0, failed: 0 });
+            expect(mockS3.putObject).toHaveBeenCalled();
         });
 
         it("counts a file as failed if the upload throws, without stopping the rest", async () => {
@@ -800,11 +791,17 @@ describe("OnboardService", () => {
             const config = await service.resolveConfigFromSheet("projects-sheet-id");
 
             expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("projects-sheet-id", ["Sheet1"]);
-            expect(config.confluence?.baseUrl).toBe("https://saturam.atlassian.net");
-            expect(config.jira?.baseUrl).toBe("https://saturam.atlassian.net");
+            // Base URLs are written into each project's own entry, not a shared top-level block —
+            // otherwise two projects on different Atlassian sites would clobber each other's host.
+            expect(config.confluence).toBeUndefined();
+            expect(config.jira).toBeUndefined();
             expect(config.projects?.Saturam).toEqual({
-                confluence: { pages: ["123456789", "987654321"], space: "PROJ" },
-                jira: { tickets: ["PROJ-123", "PROJ-456"] },
+                confluence: {
+                    baseUrl: "https://saturam.atlassian.net",
+                    pages: ["123456789", "987654321"],
+                    space: "PROJ",
+                },
+                jira: { baseUrl: "https://saturam.atlassian.net", tickets: ["PROJ-123", "PROJ-456"] },
                 googleDocs: { docs: ["doc-id-1"] },
                 googleSheets: { spreadsheetId: "sheet-id-1", range: "Sheet1!A1:E100" },
                 onboardingSheets: [{ spreadsheetId: "links-sheet-id" }],
@@ -816,13 +813,57 @@ describe("OnboardService", () => {
             expect(Object.keys(config.projects ?? {})).toEqual(["Saturam", "Acme"]);
         });
 
+        it("keeps each project's Atlassian base URL independent when two projects use different sites", async () => {
+            mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue({
+                spreadsheetId: "projects-sheet-id",
+                sheets: [{ title: "Sheet1" }],
+            } as any);
+            mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
+                valueRanges: [
+                    {
+                        values: [
+                            [
+                                "project_name",
+                                "confluence_base_url",
+                                "confluence_pages",
+                                "jira_base_url",
+                                "jira_tickets",
+                            ],
+                            [
+                                "Saturam",
+                                "https://saturam.atlassian.net",
+                                "111",
+                                "https://saturam.atlassian.net",
+                                "PROJ-1",
+                            ],
+                            ["Acme", "https://acme.atlassian.net", "222", "https://acme.atlassian.net", "ACME-1"],
+                        ],
+                    },
+                ],
+            } as any);
+
+            const config = await service.resolveConfigFromSheet("projects-sheet-id");
+
+            expect(config.projects?.Saturam?.confluence?.baseUrl).toBe("https://saturam.atlassian.net");
+            expect(config.projects?.Saturam?.jira?.baseUrl).toBe("https://saturam.atlassian.net");
+            expect(config.projects?.Acme?.confluence?.baseUrl).toBe("https://acme.atlassian.net");
+            expect(config.projects?.Acme?.jira?.baseUrl).toBe("https://acme.atlassian.net");
+        });
+
         it("falls back to sheet-of-links mode when there is no project_name column", async () => {
             mockGoogleDrive.getSpreadsheetMetadata.mockResolvedValue({
                 spreadsheetId: "links-only-sheet-id",
                 sheets: [{ title: "Sheet1" }],
             } as any);
             mockGoogleDrive.batchGetSpreadsheetValues.mockResolvedValue({
-                valueRanges: [{ values: [["Resource", "Link"], ["Runbook", "https://saturam.atlassian.net/wiki/x"]] }],
+                valueRanges: [
+                    {
+                        values: [
+                            ["Resource", "Link"],
+                            ["Runbook", "https://saturam.atlassian.net/wiki/x"],
+                        ],
+                    },
+                ],
             } as any);
 
             const config = await service.resolveConfigFromSheet("links-only-sheet-id");

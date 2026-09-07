@@ -23,6 +23,10 @@ export interface KnowledgeDocument {
         author?: string;
         labels?: string[];
     };
+    /** Raw spreadsheet rows (header row + data rows), set only by GoogleSheetsKnowledgeSource. */
+    sheetRows?: string[][];
+    /** The A1-notation range actually fetched, set only by GoogleSheetsKnowledgeSource. */
+    sheetRange?: string;
 }
 
 /**

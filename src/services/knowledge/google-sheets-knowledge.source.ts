@@ -70,6 +70,8 @@ export class GoogleSheetsKnowledgeSource implements KnowledgeSource {
             metadata: {
                 updatedAt: new Date().toISOString(),
             },
+            sheetRows: allRows as string[][],
+            sheetRange: effectiveRange,
         };
     }
 }

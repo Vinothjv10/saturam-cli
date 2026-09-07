@@ -106,6 +106,15 @@ export class OnboardService {
     private projectNameOverride?: string;
     /** Content files written during the current sync() call, with their S3/Bedrock metadata attributes. */
     private syncedFiles: SyncedDocument[] = [];
+    /**
+     * Output paths already claimed during the current sync() call, shared across every
+     * executeTasks() invocation (Confluence, Jira, Google Docs each call it separately) so a
+     * custom outputPath colliding across source types is detected and renamed, not overwritten.
+     */
+    private usedOutputPaths = new Set<string>();
+    /** Per-document fetch outcome counts for the current sync() call, so a fully failed run can be reported. */
+    private fetchedCount = 0;
+    private failedCount = 0;
 
     /** Normalizes a project name the same way sanitizeProjectName does, for case/punctuation-insensitive matching. */
     private normalizeProjectKey(name: string): string {
@@ -164,13 +173,7 @@ export class OnboardService {
             if (!projectName) continue;
 
             const confluenceBaseUrl = col(row, "confluence_base_url");
-            if (confluenceBaseUrl) {
-                config.confluence = { ...config.confluence, baseUrl: confluenceBaseUrl };
-            }
             const jiraBaseUrl = col(row, "jira_base_url");
-            if (jiraBaseUrl) {
-                config.jira = { ...config.jira, baseUrl: jiraBaseUrl };
-            }
 
             const pages = this.splitList(col(row, "confluence_pages"));
             const space = col(row, "confluence_space");
@@ -182,11 +185,23 @@ export class OnboardService {
             const onboardingSheetIds = this.splitList(col(row, "onboarding_sheet_ids"));
 
             config.projects![projectName] = {
-                ...(pages.length || space
-                    ? { confluence: { ...(pages.length ? { pages } : {}), ...(space ? { space } : {}) } }
+                ...(pages.length || space || confluenceBaseUrl
+                    ? {
+                          confluence: {
+                              ...(confluenceBaseUrl ? { baseUrl: confluenceBaseUrl } : {}),
+                              ...(pages.length ? { pages } : {}),
+                              ...(space ? { space } : {}),
+                          },
+                      }
                     : {}),
-                ...(tickets.length || jql
-                    ? { jira: { ...(tickets.length ? { tickets } : {}), ...(jql ? { jql } : {}) } }
+                ...(tickets.length || jql || jiraBaseUrl
+                    ? {
+                          jira: {
+                              ...(jiraBaseUrl ? { baseUrl: jiraBaseUrl } : {}),
+                              ...(tickets.length ? { tickets } : {}),
+                              ...(jql ? { jql } : {}),
+                          },
+                      }
                     : {}),
                 ...(docs.length ? { googleDocs: { docs } } : {}),
                 ...(sheetId
@@ -233,9 +248,12 @@ export class OnboardService {
         config: OnboardConfig,
         cwd: string,
         projectNameOverride?: string,
-    ): Promise<{ filesWritten: SyncedDocument[] }> {
+    ): Promise<{ filesWritten: SyncedDocument[]; fetched: number; failed: number }> {
         this.projectNameOverride = projectNameOverride;
         this.syncedFiles = [];
+        this.usedOutputPaths = new Set<string>();
+        this.fetchedCount = 0;
+        this.failedCount = 0;
 
         const allProjectEntries = Object.entries(config.projects || {});
         const filteredProjectEntries = projectNameOverride
@@ -253,16 +271,20 @@ export class OnboardService {
         // when filtering by project — each sheet tab (or explicit cell link) resolves to its own
         // project name, and the resulting tasks are filtered by that project name below.
         const globalSheetConfigs = config.onboardingSheets || [];
-        const projectSheetConfigs = filteredProjectEntries.flatMap(([projectName, projectConfig]) =>
-            projectConfig.onboardingSheets?.map((sheetConfig) => ({
-                ...sheetConfig,
-                projectName,
-            })) || [],
+        const projectSheetConfigs = filteredProjectEntries.flatMap(
+            ([projectName, projectConfig]) =>
+                projectConfig.onboardingSheets?.map((sheetConfig) => ({
+                    ...sheetConfig,
+                    projectName,
+                })) || [],
         );
         const allSheetConfigs = [...globalSheetConfigs, ...projectSheetConfigs];
         const sheetResolved =
             allSheetConfigs.length > 0
-                ? await this.resolveTasksFromSheets(allSheetConfigs)
+                ? await this.resolveTasksFromSheets(allSheetConfigs, {
+                      confluenceBaseUrl: config.confluence?.baseUrl,
+                      jiraBaseUrl: config.jira?.baseUrl,
+                  })
                 : { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
         sheetResolved.confluenceTasks = sheetResolved.confluenceTasks.filter((t) =>
             this.matchesProjectFilter(t.projectName),
@@ -420,21 +442,33 @@ export class OnboardService {
 
         // Run executions
         if (confluenceTasks.length > 0) {
-            const mappedTasks = confluenceTasks.map((t) => {
-                const isUrl =
-                    typeof t.pageEntry === "string" &&
-                    (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"));
-                const urlParsed = isUrl ? parseConfluenceUrl(t.pageEntry as string) : null;
-                if (isUrl && !urlParsed) {
-                    throw new Error(`Could not extract a valid page ID from Confluence URL: ${t.pageEntry}`);
-                }
-                return {
-                    id: urlParsed ? urlParsed.pageId : typeof t.pageEntry === "string" ? t.pageEntry : t.pageEntry.id,
-                    baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
-                    projectName: t.projectName,
-                    outputPath: typeof t.pageEntry === "string" ? undefined : t.pageEntry.outputPath,
-                };
-            });
+            const mappedTasks = confluenceTasks
+                .map((t) => {
+                    const isUrl =
+                        typeof t.pageEntry === "string" &&
+                        (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"));
+                    const urlParsed = isUrl ? parseConfluenceUrl(t.pageEntry as string) : null;
+                    if (isUrl && !urlParsed) {
+                        throw new Error(`Could not extract a valid page ID from Confluence URL: ${t.pageEntry}`);
+                    }
+                    if (urlParsed && !this.isTrustedAtlassianOrigin(urlParsed.baseUrl, config.confluence?.baseUrl)) {
+                        logger.warn(
+                            `Skipping Confluence URL with untrusted host: ${t.pageEntry} (expected ${config.confluence?.baseUrl ?? "a *.atlassian.net host"})`,
+                        );
+                        return null;
+                    }
+                    return {
+                        id: urlParsed
+                            ? urlParsed.pageId
+                            : typeof t.pageEntry === "string"
+                              ? t.pageEntry
+                              : t.pageEntry.id,
+                        baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
+                        projectName: t.projectName,
+                        outputPath: typeof t.pageEntry === "string" ? undefined : t.pageEntry.outputPath,
+                    };
+                })
+                .filter((t): t is NonNullable<typeof t> => t !== null);
             await this.executeTasks(
                 this.confluenceSource,
                 mappedTasks,
@@ -447,25 +481,33 @@ export class OnboardService {
         }
 
         if (jiraTasks.length > 0) {
-            const mappedTasks = jiraTasks.map((t) => {
-                const isUrl =
-                    typeof t.ticketEntry === "string" &&
-                    (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"));
-                const urlParsed = isUrl ? parseJiraUrl(t.ticketEntry as string) : null;
-                if (isUrl && !urlParsed) {
-                    throw new Error(`Could not extract a valid ticket key from Jira URL: ${t.ticketEntry}`);
-                }
-                return {
-                    id: urlParsed
-                        ? urlParsed.ticketKey
-                        : typeof t.ticketEntry === "string"
-                          ? t.ticketEntry
-                          : t.ticketEntry.key,
-                    baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
-                    projectName: t.projectName,
-                    outputPath: typeof t.ticketEntry === "string" ? undefined : t.ticketEntry.outputPath,
-                };
-            });
+            const mappedTasks = jiraTasks
+                .map((t) => {
+                    const isUrl =
+                        typeof t.ticketEntry === "string" &&
+                        (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"));
+                    const urlParsed = isUrl ? parseJiraUrl(t.ticketEntry as string) : null;
+                    if (isUrl && !urlParsed) {
+                        throw new Error(`Could not extract a valid ticket key from Jira URL: ${t.ticketEntry}`);
+                    }
+                    if (urlParsed && !this.isTrustedAtlassianOrigin(urlParsed.baseUrl, config.jira?.baseUrl)) {
+                        logger.warn(
+                            `Skipping Jira URL with untrusted host: ${t.ticketEntry} (expected ${config.jira?.baseUrl ?? "a *.atlassian.net host"})`,
+                        );
+                        return null;
+                    }
+                    return {
+                        id: urlParsed
+                            ? urlParsed.ticketKey
+                            : typeof t.ticketEntry === "string"
+                              ? t.ticketEntry
+                              : t.ticketEntry.key,
+                        baseUrl: urlParsed ? urlParsed.baseUrl : t.baseUrl,
+                        projectName: t.projectName,
+                        outputPath: typeof t.ticketEntry === "string" ? undefined : t.ticketEntry.outputPath,
+                    };
+                })
+                .filter((t): t is NonNullable<typeof t> => t !== null);
             await this.executeTasks(
                 this.jiraSource,
                 mappedTasks,
@@ -529,7 +571,7 @@ export class OnboardService {
             logger.warn("No Confluence pages, Jira tickets, Google Documents, or Google Sheets configured to fetch.");
         }
 
-        return { filesWritten: [...this.syncedFiles] };
+        return { filesWritten: [...this.syncedFiles], fetched: this.fetchedCount, failed: this.failedCount };
     }
 
     // --- Generic task executor (replaces executeConfluenceTasks / executeJiraTasks / executeGoogleDocsTasks) ---
@@ -558,7 +600,6 @@ export class OnboardService {
         logger.info(`Found ${tasks.length} ${label} ${unit} to fetch...`);
         const baseOnboardDir = this.resolveBaseOnboardDir();
         const limit = pLimit(5);
-        const usedPaths = new Set<string>();
 
         const results = await Promise.allSettled(
             tasks.map((task) =>
@@ -580,8 +621,8 @@ export class OnboardService {
                           ? join(baseOnboardDir, sanitizedProj, subdir, `${safeTitle}.md`)
                           : join(baseOnboardDir, subdir, `${safeTitle}.md`);
 
-                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, usedPaths);
-                    usedPaths.add(absoluteOutputPath);
+                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, this.usedOutputPaths);
+                    this.usedOutputPaths.add(absoluteOutputPath);
 
                     await this.writeDoc(doc, absoluteOutputPath);
                     this.syncedFiles.push({
@@ -623,9 +664,17 @@ export class OnboardService {
         const baseOnboardDir = this.resolveBaseOnboardDir();
 
         try {
-            // Delegate fetch to the GoogleSheetsKnowledgeSource adapter
+            // Delegate fetch to the GoogleSheetsKnowledgeSource adapter — one round-trip supplies
+            // both the Markdown table (uploaded/ingested content) and the raw rows (local sidecar).
             const doc = await this.googleSheetsSource.fetch(spreadsheetId, { range });
             const spreadsheetTitle = doc.title;
+            const allRows = doc.sheetRows ?? [];
+            const effectiveRange = doc.sheetRange ?? range ?? "Sheet1";
+
+            if (allRows.length === 0) {
+                logger.warn(`Google Sheet "${spreadsheetTitle}" range "${effectiveRange}" returned no data.`);
+                return;
+            }
 
             const safeTitle = this.getSafeTitle(spreadsheetTitle, spreadsheetId);
             const sanitizedProj = this.sanitizeProjectName(projectName);
@@ -633,34 +682,26 @@ export class OnboardService {
             const outputDir = sanitizedProj
                 ? join(baseOnboardDir, sanitizedProj, "google-sheets")
                 : join(baseOnboardDir, "google-sheets");
+            const mdPath = join(outputDir, `${safeTitle}.md`);
             const jsonPath = join(outputDir, `${safeTitle}.json`);
-
-            // Fetch raw rows for the JSON sidecar via GoogleDriveService directly
-            const spreadsheetMeta = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
-            const firstSheetTitle = spreadsheetMeta.sheets?.[0]?.title ?? "Sheet1";
-            const effectiveRange = range ?? firstSheetTitle;
-            const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, [effectiveRange]);
-            const allRows = batchData.valueRanges?.[0]?.values ?? [];
-
-            if (allRows.length === 0) {
-                logger.warn(`Google Sheet "${spreadsheetTitle}" range "${effectiveRange}" returned no data.`);
-                return;
-            }
 
             const sidecar = {
                 spreadsheetId,
                 title: spreadsheetTitle,
                 range: effectiveRange,
-                fetchedAt: new Date().toISOString(),
+                fetchedAt: doc.metadata?.updatedAt ?? new Date().toISOString(),
                 rowCount: allRows.length,
                 headers: allRows[0] ?? [],
                 rows: allRows.slice(1),
             };
 
             await mkdir(outputDir, { recursive: true });
+            // Markdown is what gets uploaded to S3/Bedrock — JSON is not a supported Bedrock KB
+            // document format and stays local-only, as a sidecar for inspection/tooling.
+            await writeFile(mdPath, doc.content, "utf8");
             await writeFile(jsonPath, JSON.stringify(sidecar, null, 4), "utf8");
             this.syncedFiles.push({
-                contentPath: jsonPath,
+                contentPath: mdPath,
                 metadataAttributes: this.buildMetadataAttributes({
                     title: spreadsheetTitle,
                     source: "google-sheets",
@@ -673,10 +714,12 @@ export class OnboardService {
             });
 
             logger.info(
-                `✓ Saved Google Sheet "${spreadsheetTitle}" index (${allRows.length - 1} data row(s)) to: ${jsonPath}`,
+                `✓ Saved Google Sheet "${spreadsheetTitle}" (${allRows.length - 1} data row(s)) to: ${mdPath} (and JSON sidecar)`,
             );
+            this.fetchedCount++;
         } catch (err) {
             logger.error(`✗ Failed to read Google Sheet ${spreadsheetId}: ${(err as Error).message}`);
+            this.failedCount++;
         }
     }
 
@@ -754,13 +797,9 @@ export class OnboardService {
                     ensuredPrefixes.add(folderPrefix);
                 }
 
-                const alreadyExists = await this.s3.objectExists(key);
-                if (alreadyExists) {
-                    logger.info(`  s3: ${key} already exists — skipping`);
-                    skipped++;
-                    continue;
-                }
-
+                // PutObject is idempotent and Bedrock ingestion diffs by ETag, so always upload —
+                // skipping when the key already exists would freeze the Knowledge Base at whatever
+                // content was first synced, since an edited page would never be re-uploaded.
                 const body = await readFile(file.contentPath);
                 const contentType = key.endsWith(".json") ? "application/json" : "text/markdown";
                 await this.s3.putObject(key, body, contentType);
@@ -884,6 +923,8 @@ export class OnboardService {
         });
         const fetchedCount = results.filter((r) => r.status === "fulfilled").length;
         const failedCount = results.filter((r) => r.status === "rejected").length;
+        this.fetchedCount += fetchedCount;
+        this.failedCount += failedCount;
         logger.info(`\n${label} sync completed: ${fetchedCount} ${unit} fetched, ${failedCount} failed.`);
     }
 
@@ -914,6 +955,34 @@ export class OnboardService {
         );
     }
 
+    /**
+     * Guards against sending Atlassian credentials to an arbitrary host: parseConfluenceUrl /
+     * parseJiraUrl accept any URL and return its origin as `baseUrl`, which is later attached to
+     * an `Authorization: Basic ...` request. A URL can come from a config entry or, worse, a cell
+     * in a shared Google Sheet anyone with edit access can write to — so only trust an origin that
+     * matches the project's configured base URL, or *.atlassian.net when none is configured.
+     */
+    private isTrustedAtlassianOrigin(candidateBaseUrl: string, configuredBaseUrl?: string): boolean {
+        let candidateOrigin: string;
+        try {
+            candidateOrigin = new URL(candidateBaseUrl).origin;
+        } catch {
+            return false;
+        }
+        if (configuredBaseUrl) {
+            try {
+                return candidateOrigin === new URL(configuredBaseUrl).origin;
+            } catch {
+                return false;
+            }
+        }
+        try {
+            return new URL(candidateBaseUrl).hostname.endsWith(".atlassian.net");
+        } catch {
+            return false;
+        }
+    }
+
     private getUniqueOutputPath(basePath: string, usedPaths: Set<string>): string {
         const getUnique = (pathStr: string, suffix: number): string => {
             if (!usedPaths.has(pathStr)) return pathStr;
@@ -932,6 +1001,7 @@ export class OnboardService {
 
     private async resolveTasksFromSheets(
         sheetConfigs: Array<{ spreadsheetId: string; range?: string; projectName?: string }>,
+        trustedBaseUrls: { confluenceBaseUrl?: string; jiraBaseUrl?: string },
     ): Promise<{
         confluenceTasks: ConfluenceTask[];
         jiraTasks: JiraTask[];
@@ -978,6 +1048,17 @@ export class OnboardService {
                                     const trimCell = cell.trim();
                                     const confUrl = parseConfluenceUrl(trimCell);
                                     if (confUrl) {
+                                        if (
+                                            !this.isTrustedAtlassianOrigin(
+                                                confUrl.baseUrl,
+                                                trustedBaseUrls.confluenceBaseUrl,
+                                            )
+                                        ) {
+                                            logger.warn(
+                                                `Skipping Confluence URL with untrusted host from sheet cell: ${trimCell}`,
+                                            );
+                                            return;
+                                        }
                                         confluenceTasks.push({
                                             pageEntry: { id: confUrl.pageId },
                                             projectName: resolvedProjectName,
@@ -987,6 +1068,14 @@ export class OnboardService {
                                     }
                                     const jiraUrl = parseJiraUrl(trimCell);
                                     if (jiraUrl) {
+                                        if (
+                                            !this.isTrustedAtlassianOrigin(jiraUrl.baseUrl, trustedBaseUrls.jiraBaseUrl)
+                                        ) {
+                                            logger.warn(
+                                                `Skipping Jira URL with untrusted host from sheet cell: ${trimCell}`,
+                                            );
+                                            return;
+                                        }
                                         jiraTasks.push({
                                             ticketEntry: { key: jiraUrl.ticketKey },
                                             projectName: resolvedProjectName,

@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "fs";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { chmod, mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { Service } from "typedi";
@@ -80,21 +80,7 @@ export const CloudProviderConfigSchema = z.object({
 
 export type CloudProviderConfig = z.infer<typeof CloudProviderConfigSchema>;
 
-// Retired/renamed model IDs -> their current replacement. Keeps previously-saved configs
-// (e.g. a Gemini model retired by the provider) working after an upgrade, without requiring
-// the user to re-run 'sat-cli init'.
-const RETIRED_MODEL_MIGRATIONS: Record<string, LLMModel> = {
-    "gemini-2.5-pro": LLMModel.GEMINI_3_1_PRO,
-    "gemini-2.5-flash": LLMModel.GEMINI_3_7_FLASH,
-    "gemini-3-pro": LLMModel.GEMINI_3_1_PRO,
-    "gemini-3-flash": LLMModel.GEMINI_3_7_FLASH,
-};
-
-const migrateModelId = (val: unknown) => {
-    if (typeof val !== "string") return val;
-    const withoutRegionPrefix = val.replace(/^(us|eu|ap)\./, "");
-    return RETIRED_MODEL_MIGRATIONS[withoutRegionPrefix] ?? withoutRegionPrefix;
-};
+const migrateModelId = (val: unknown) => (typeof val === "string" ? val.replace(/^(us|eu|ap)\./, "") : val);
 const modelField = z.preprocess(migrateModelId, z.nativeEnum(LLMModel).optional());
 
 export const PersonalConfigurationSchema = z.object({
@@ -164,10 +150,10 @@ export const PROVIDER_MODELS: Record<AIProvider, LLMModel[]> = {
         LLMModel.BEDROCK_NOVA_PRO,
     ],
     [AIProvider.GOOGLE]: [
-        LLMModel.GEMINI_3_1_PRO,
-        LLMModel.GEMINI_3_7_FLASH,
-        LLMModel.GEMINI_3_6_FLASH,
-        LLMModel.GEMINI_3_5_FLASH,
+        LLMModel.GEMINI_2_5_PRO,
+        LLMModel.GEMINI_2_5_FLASH,
+        LLMModel.GEMINI_3_PRO,
+        LLMModel.GEMINI_3_FLASH,
     ],
     [AIProvider.OPENAI]: [
         LLMModel.OPENAI_GPT_4O,
@@ -395,32 +381,57 @@ export class ConfigService {
 
     public async savePersonalConfig(config: PersonalConfiguration): Promise<void> {
         const configPath = this.getPersonalConfigPath();
-        await mkdir(dirname(configPath), { recursive: true });
-        await writeFile(configPath, JSON.stringify(config, null, 4), "utf8");
+        await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
+        await writeFile(configPath, JSON.stringify(config, null, 4), { encoding: "utf8", mode: 0o600 });
+        await chmod(configPath, 0o600);
         this.personalConfig = config;
     }
 
-    // --- Project Config (repo-level: .sateng) ---
+    // --- Project Config (repo-level: .sateng/) ---
+
+    /** The single source of truth for the repo-level ".sateng" directory (project config, onboarding config, ...). */
+    public getProjectConfigDir(): string {
+        return join(this.dir.repoRoot, ".sateng");
+    }
 
     public getProjectConfigPath(): string {
-        return join(this.dir.repoRoot, ".sateng");
+        return join(this.getProjectConfigDir(), "config.json");
     }
 
     public async loadProjectConfig(): Promise<ProjectConfiguration | null> {
         const configPath = this.getProjectConfigPath();
-        if (!existsSync(configPath)) return null;
-        try {
-            if (statSync(configPath).isDirectory()) return null;
-        } catch {
-            return null;
+        if (existsSync(configPath)) {
+            try {
+                if (statSync(configPath).isDirectory()) return null;
+            } catch {
+                return null;
+            }
+            const raw = await readFile(configPath, "utf8");
+            return ProjectConfigurationSchema.parse(JSON.parse(raw));
         }
-        const raw = await readFile(configPath, "utf8");
-        return ProjectConfigurationSchema.parse(JSON.parse(raw));
+
+        // Legacy layout: ".sateng" used to be the config file itself, before it became a
+        // directory (see getProjectConfigDir). Keep reading it until it's migrated on next save.
+        const legacyPath = this.getProjectConfigDir();
+        if (existsSync(legacyPath) && statSync(legacyPath).isFile()) {
+            const raw = await readFile(legacyPath, "utf8");
+            return ProjectConfigurationSchema.parse(JSON.parse(raw));
+        }
+
+        return null;
     }
 
     public async saveProjectConfig(config: ProjectConfiguration): Promise<void> {
-        const configPath = this.getProjectConfigPath();
-        await writeFile(configPath, JSON.stringify(config, null, 4), "utf8");
+        const configDir = this.getProjectConfigDir();
+
+        // Migrate: an existing ".sateng" *file* (legacy layout) blocks creating ".sateng" as a
+        // directory — remove it now that its content is being folded into the new location.
+        if (existsSync(configDir) && statSync(configDir).isFile()) {
+            await unlink(configDir);
+        }
+
+        await mkdir(configDir, { recursive: true });
+        await writeFile(this.getProjectConfigPath(), JSON.stringify(config, null, 4), "utf8");
     }
 
     // --- Session ---
@@ -486,10 +497,15 @@ export class ConfigService {
         return config.providers?.[provider];
     }
 
-    /** Whether at least one AI/LLM provider has been configured via 'sat-cli init'. */
+    /**
+     * Whether at least one AI/LLM provider is usable — either configured via 'sat-cli init'
+     * or available purely from its environment variable (the same sources getApiKey() honours,
+     * so e.g. `sat-cli review` working with just ANTHROPIC_API_KEY set doesn't get rejected here).
+     */
     public async hasAnyLLMProviderConfigured(): Promise<boolean> {
         const config = await this.loadPersonalConfig();
-        return Object.keys(config.providers ?? {}).length > 0;
+        if (Object.keys(config.providers ?? {}).length > 0) return true;
+        return Object.values(PROVIDER_ENV_VARS).some((envVar) => Boolean(process.env[envVar]));
     }
 
     // --- GitHub Token ---
@@ -554,7 +570,7 @@ export class ConfigService {
         return config.onboardingSheetId;
     }
 
-    public async setOnboardingSheetId(spreadsheetId: string): Promise<void> {
+    public async setOnboardingSheetId(spreadsheetId: string | undefined): Promise<void> {
         const config = await this.loadPersonalConfig();
         await this.savePersonalConfig({ ...config, onboardingSheetId: spreadsheetId });
     }
