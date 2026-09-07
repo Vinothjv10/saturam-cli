@@ -48,10 +48,10 @@ const MODEL_DISPLAY_NAMES: Record<LLMModel, string> = {
     [LLMModel.BEDROCK_CLAUDE_4_6_OPUS]: "Bedrock Claude 4.6 Opus",
     [LLMModel.BEDROCK_NOVA_PRO]: "Amazon Nova Pro",
     // Gemini
-    [LLMModel.GEMINI_3_1_PRO]: "Gemini 3.1 Pro",
-    [LLMModel.GEMINI_3_7_FLASH]: "Gemini 3.7 Flash (latest)",
-    [LLMModel.GEMINI_3_6_FLASH]: "Gemini 3.6 Flash",
-    [LLMModel.GEMINI_3_5_FLASH]: "Gemini 3.5 Flash",
+    [LLMModel.GEMINI_2_5_PRO]: "Gemini 2.5 Pro",
+    [LLMModel.GEMINI_2_5_FLASH]: "Gemini 2.5 Flash",
+    [LLMModel.GEMINI_3_PRO]: "Gemini 3 Pro",
+    [LLMModel.GEMINI_3_FLASH]: "Gemini 3 Flash",
     // OpenAI
     [LLMModel.OPENAI_GPT_4O]: "GPT-4o",
     [LLMModel.OPENAI_GPT_5]: "GPT-5",
@@ -346,7 +346,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const awsRegion = await input({
             message: "AWS region:",
-            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "",
+            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
             validate: (val) => (val.trim() ? true : "AWS region is required"),
         });
 
@@ -507,7 +507,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
         const awsRegion = await input({
             message: "AWS region:",
-            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "",
+            default: existing?.awsRegion ?? process.env.AWS_REGION ?? "us-east-1",
             validate: (val) => (val.trim() ? true : "AWS region is required"),
         });
 

@@ -1,5 +1,8 @@
 /**
- * Wraps the native `fetch` with an AbortController-based timeout.
+ * Wraps the native `fetch` with an AbortController-based timeout, plus a small retry/backoff
+ * layer for transient failures (429 rate limits, 5xx server errors) — without this, a single
+ * 429 mid-space-sync becomes a permanent per-document failure under any real concurrency
+ * (see onboard.service.ts's pLimit(5) usage against Atlassian/Google over thousands of pages).
  *
  * The timeout covers the *entire* request lifecycle — both header resolution
  * and body consumption (.json(), .text(), .arrayBuffer()).  The AbortController
@@ -9,7 +12,29 @@
  * Default timeout: 30 seconds — covers slow Confluence/Jira/Google instances
  * without blocking the Node process indefinitely on a stalled connection.
  */
-export async function fetchWithTimeout(url: string, init: RequestInit = {}, ms = 30_000): Promise<Response> {
+
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_DELAY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Parses a Retry-After header (seconds, or an HTTP date) into a millisecond delay, or null. */
+function parseRetryAfterMs(response: Response): number | null {
+    const header = response.headers.get("retry-after");
+    if (!header) return null;
+
+    const seconds = Number(header);
+    if (!Number.isNaN(seconds)) return Math.max(0, seconds * 1000);
+
+    const dateMs = Date.parse(header);
+    if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+
+    return null;
+}
+
+async function fetchOnce(url: string, init: RequestInit, ms: number): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), ms);
 
@@ -52,5 +77,24 @@ export async function fetchWithTimeout(url: string, init: RequestInit = {}, ms =
             throw new Error(`Request to ${url} timed out after ${ms}ms`);
         }
         throw err;
+    }
+}
+
+export async function fetchWithTimeout(
+    url: string,
+    init: RequestInit = {},
+    ms = 30_000,
+    maxRetries = DEFAULT_MAX_RETRIES,
+): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+        const response = await fetchOnce(url, init, ms);
+
+        const isRetryable = response.status === 429 || response.status >= 500;
+        if (!isRetryable || attempt >= maxRetries) {
+            return response;
+        }
+
+        const delayMs = parseRetryAfterMs(response) ?? DEFAULT_BASE_DELAY_MS * 2 ** attempt;
+        await sleep(delayMs);
     }
 }

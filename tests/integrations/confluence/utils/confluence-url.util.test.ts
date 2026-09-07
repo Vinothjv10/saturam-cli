@@ -33,4 +33,14 @@ describe("parseConfluenceUrl", () => {
         expect(result?.baseUrl).toBe("https://myteam.atlassian.net");
         expect(result?.pageId).toBe("42");
     });
+
+    it("should preserve a Server/Data Center context path in baseUrl (?pageId= form)", () => {
+        const result = parseConfluenceUrl("https://company.com/confluence/pages/viewpage.action?pageId=123");
+        expect(result).toEqual({ baseUrl: "https://company.com/confluence", pageId: "123" });
+    });
+
+    it("should preserve a Server/Data Center context path in baseUrl (/wiki/spaces form)", () => {
+        const result = parseConfluenceUrl("https://company.com/confluence/wiki/spaces/DEV/pages/42");
+        expect(result).toEqual({ baseUrl: "https://company.com/confluence", pageId: "42" });
+    });
 });

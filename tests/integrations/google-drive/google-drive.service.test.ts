@@ -37,6 +37,7 @@ describe("GoogleDriveService", () => {
             ok: false,
             status,
             statusText,
+            headers: new Headers(),
             text: jest.fn().mockResolvedValue(textContent),
         };
         global.fetch = jest.fn().mockResolvedValue(response) as any;
@@ -187,17 +188,20 @@ describe("GoogleDriveService", () => {
 
             expect(result).toBe(mockBuffer);
             const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
-            expect(calledUrl).toBe("https://www.googleapis.com/drive/v3/files/binaryFileId?alt=media");
+            expect(calledUrl).toBe(
+                "https://www.googleapis.com/drive/v3/files/binaryFileId?alt=media&supportsAllDrives=true",
+            );
         });
 
         it("throws an error when fetch fails", async () => {
             mockConfigService.getGoogleAccessToken.mockResolvedValue("mock_token_123");
             mockFetchFail(500, "Internal Server Error", "Failure");
 
+            // A 500 is retried with backoff before fetchWithTimeout gives up and returns it.
             await expect(service.getFileBinary("binaryFileId")).rejects.toThrow(
                 "Failed to fetch binary content for file binaryFileId: 500 Internal Server Error - Failure",
             );
-        });
+        }, 10_000);
     });
 
     describe("searchFiles", () => {

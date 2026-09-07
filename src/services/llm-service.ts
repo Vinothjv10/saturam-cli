@@ -150,9 +150,12 @@ export class LlmService {
     private async createBedrockModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const { ChatBedrockConverse } = await import("@langchain/aws");
         const providerConfig = await this.config.getProviderConfig(AIProvider.BEDROCK);
-        const region = providerConfig?.awsRegion ?? process.env.AWS_REGION;
+        let region = providerConfig?.awsRegion ?? process.env.AWS_REGION;
         if (!region) {
-            throw new Error("AWS Bedrock region is not configured. Run 'sat-cli init' and configure the Bedrock provider.");
+            region = "us-east-1";
+            logger.warn(
+                "AWS Bedrock region is not configured — defaulting to us-east-1. Run 'sat-cli init' to set one explicitly.",
+            );
         }
         const profile = providerConfig?.awsProfile ?? process.env.AWS_PROFILE;
 
@@ -251,9 +254,7 @@ export class LlmService {
         const apiToken = providerConfig?.apiToken ?? process.env.OLLAMA_API_TOKEN;
 
         // For remote/custom Ollama deployments, prefer the exact configured model name.
-        const modelName =
-            providerConfig?.model ??
-            (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
+        const modelName = providerConfig?.model ?? (model === LLMModel.OLLAMA_CUSTOM ? "llama3" : (model as string));
         if (model === LLMModel.OLLAMA_CUSTOM) {
             logger.info(`Using custom Ollama model: ${modelName}`);
         }
@@ -270,11 +271,8 @@ export class LlmService {
 
     private async createSelfHostedModel(model: LLMModel, options?: LLMOptions): Promise<ChatModel> {
         const providerConfig = await this.config.getProviderConfig(AIProvider.SELF_HOSTED);
-        const endpoint =
-            providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
-        const modelName =
-            providerConfig?.model ??
-            process.env.SELF_HOSTED_MODEL;
+        const endpoint = providerConfig?.endpoint ?? process.env.SELF_HOSTED_ENDPOINT;
+        const modelName = providerConfig?.model ?? process.env.SELF_HOSTED_MODEL;
 
         if (!endpoint) {
             throw new Error(
@@ -283,9 +281,7 @@ export class LlmService {
         }
 
         if (!modelName) {
-            throw new Error(
-                "Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.",
-            );
+            throw new Error("Self-hosted model name is required. Set SELF_HOSTED_MODEL or run 'sat-cli init'.");
         }
 
         const accessToken = getSelfHostedAuthToken(providerConfig);

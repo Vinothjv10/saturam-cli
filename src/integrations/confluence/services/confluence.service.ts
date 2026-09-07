@@ -6,6 +6,7 @@ import { fetchWithTimeout } from "../../../utils/fetch-with-timeout";
 import {
     ConfluenceChildPagesApiResponse,
     ConfluenceContentListApiResponse,
+    ConfluenceContentResult,
     ConfluencePageApiResponse,
     ConfluenceSearchApiResponse,
     ConfluenceSpaceListApiResponse,
@@ -164,15 +165,15 @@ export class ConfluenceService {
     /**
      * Convenience helper — fetches ALL pages in a space by auto-paginating listPagesInSpace().
      */
-    public async listAllPagesInSpace(baseUrl: string, spaceKey: string): Promise<ConfluencePageApiResponse[]> {
+    public async listAllPagesInSpace(baseUrl: string, spaceKey: string): Promise<ConfluenceContentResult[]> {
         const limit = 100;
         const MAX_ITERATIONS = 1000;
 
         const fetchPageBatch = async (
             start: number,
             iterations: number,
-            accumulatedPages: ConfluencePageApiResponse[],
-        ): Promise<ConfluencePageApiResponse[]> => {
+            accumulatedPages: ConfluenceContentResult[],
+        ): Promise<ConfluenceContentResult[]> => {
             if (iterations >= MAX_ITERATIONS) {
                 logger.error(
                     `listAllPagesInSpace: exceeded MAX_ITERATIONS (${MAX_ITERATIONS}) for space "${spaceKey}". Partial results returned.`,
@@ -187,11 +188,15 @@ export class ConfluenceService {
             }
 
             const nextAccumulated = [...accumulatedPages, ...results];
-            if (results.length < limit) {
+            // The server may cap the effective page size below the requested `limit`, so a
+            // non-final page can come back shorter than `limit` — terminate on the absence of a
+            // "next" link (or, as a fallback, the response's own reported size vs. its own limit),
+            // not on the count against our *requested* limit.
+            if (!result._links?.next && (result.size ?? results.length) < (result.limit ?? limit)) {
                 return nextAccumulated;
             }
 
-            return fetchPageBatch(start + limit, iterations + 1, nextAccumulated);
+            return fetchPageBatch(start + (result.size ?? results.length), iterations + 1, nextAccumulated);
         };
 
         return fetchPageBatch(0, 0, []);

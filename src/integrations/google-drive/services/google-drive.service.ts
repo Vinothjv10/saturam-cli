@@ -35,7 +35,7 @@ export class GoogleDriveService {
     public async getFileMetadata(fileId: string): Promise<GoogleDriveFileMetadata> {
         const fields =
             "id,name,mimeType,modifiedTime,createdTime,owners,size,webViewLink,webContentLink,parents,trashed";
-        const url = `${GOOGLE_DRIVE_API}/files/${fileId}?fields=${encodeURIComponent(fields)}`;
+        const url = `${GOOGLE_DRIVE_API}/files/${fileId}?fields=${encodeURIComponent(fields)}&supportsAllDrives=true`;
 
         logger.debug(`Fetching file metadata for ${fileId}: ${url}`);
 
@@ -75,7 +75,7 @@ export class GoogleDriveService {
      * Only works for mimeType = "application/vnd.google-apps.document".
      */
     public async exportGoogleDocAsMarkdown(documentId: string): Promise<string> {
-        const url = `${GOOGLE_DRIVE_API}/files/${documentId}/export?mimeType=${encodeURIComponent("text/markdown")}`;
+        const url = `${GOOGLE_DRIVE_API}/files/${documentId}/export?mimeType=${encodeURIComponent("text/markdown")}&supportsAllDrives=true`;
 
         logger.debug(`Exporting file ${documentId} as Markdown: ${url}`);
 
@@ -94,7 +94,7 @@ export class GoogleDriveService {
      * Only works for mimeType = "application/vnd.google-apps.document".
      */
     public async exportGoogleDocAsHtml(documentId: string): Promise<string> {
-        const url = `${GOOGLE_DRIVE_API}/files/${documentId}/export?mimeType=${encodeURIComponent("text/html")}`;
+        const url = `${GOOGLE_DRIVE_API}/files/${documentId}/export?mimeType=${encodeURIComponent("text/html")}&supportsAllDrives=true`;
 
         logger.debug(`Exporting file ${documentId} as HTML: ${url}`);
 
@@ -113,7 +113,7 @@ export class GoogleDriveService {
      * Returns the raw file bytes as an ArrayBuffer.
      */
     public async getFileBinary(fileId: string): Promise<ArrayBuffer> {
-        const url = `${GOOGLE_DRIVE_API}/files/${fileId}?alt=media`;
+        const url = `${GOOGLE_DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`;
 
         logger.debug(`Fetching binary content for file ${fileId} from Drive: ${url}`);
 
@@ -216,7 +216,7 @@ export class GoogleDriveService {
     public async getSpreadsheetMetadata(spreadsheetId: string): Promise<GoogleSpreadsheetMetadataResponse> {
         const driveUrl = `${GOOGLE_DRIVE_API}/files/${spreadsheetId}?fields=${encodeURIComponent(
             "owners,modifiedTime,createdTime",
-        )}`;
+        )}&supportsAllDrives=true`;
         const sheetsUrl = `${GOOGLE_SHEETS_API}/${spreadsheetId}?includeGridData=false`;
 
         logger.debug(`Fetching metadata for spreadsheet ${spreadsheetId}`);

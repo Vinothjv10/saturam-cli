@@ -113,6 +113,50 @@ describe("fetchWithTimeout", () => {
         expect(result).toEqual({ data: "late" });
     });
 
+    it("should retry a 429 response with backoff and return the eventual success", async () => {
+        const mockFetch = jest
+            .fn()
+            .mockResolvedValueOnce(makeMockResponse("rate limited", 429))
+            .mockResolvedValueOnce(makeMockResponse(JSON.stringify({ ok: true }), 200));
+        global.fetch = mockFetch;
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000);
+        await jest.advanceTimersByTimeAsync(5000);
+        const response = await responsePromise;
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(response.status).toBe(200);
+    });
+
+    it("should honor a Retry-After header when retrying", async () => {
+        const rateLimited = makeMockResponse("rate limited", 429);
+        (rateLimited.headers as Headers).set("retry-after", "2");
+        const mockFetch = jest
+            .fn()
+            .mockResolvedValueOnce(rateLimited)
+            .mockResolvedValueOnce(makeMockResponse("{}", 200));
+        global.fetch = mockFetch;
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000);
+        await jest.advanceTimersByTimeAsync(2000);
+        const response = await responsePromise;
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(response.status).toBe(200);
+    });
+
+    it("should give up and return the last response after maxRetries persistent 5xx errors", async () => {
+        const mockFetch = jest.fn().mockResolvedValue(makeMockResponse("server error", 503));
+        global.fetch = mockFetch;
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 5000, 2);
+        await jest.advanceTimersByTimeAsync(10_000);
+        const response = await responsePromise;
+
+        expect(mockFetch).toHaveBeenCalledTimes(3); // initial attempt + 2 retries
+        expect(response.status).toBe(503);
+    });
+
     it("should pass request init options to fetch", async () => {
         const mockFetch = jest.fn().mockResolvedValue(makeMockResponse("{}"));
         global.fetch = mockFetch;

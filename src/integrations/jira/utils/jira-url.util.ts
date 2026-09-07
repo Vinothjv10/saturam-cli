@@ -20,13 +20,19 @@ export interface ParsedJiraUrl {
 export function parseJiraUrl(urlStr: string): ParsedJiraUrl | null {
     try {
         const url = new URL(urlStr);
+        // A Server/Data Center instance is often mounted under a context path (e.g.
+        // https://company.com/jira/...) — url.origin alone would drop it, so keep everything
+        // before the recognized Jira path segment as part of the base URL.
+        const contextPrefix = url.pathname.split(/\/(?:browse|issues)\//)[0];
+        const baseUrl = `${url.origin}${contextPrefix}`;
+
         const browseMatch = url.pathname.match(/\/browse\/([A-Z0-9]+-\d+)/i);
         if (browseMatch) {
-            return { baseUrl: url.origin, ticketKey: browseMatch[1].toUpperCase() };
+            return { baseUrl, ticketKey: browseMatch[1].toUpperCase() };
         }
         const issuesMatch = url.pathname.match(/\/issues\/([A-Z0-9]+-\d+)/i);
         if (issuesMatch) {
-            return { baseUrl: url.origin, ticketKey: issuesMatch[1].toUpperCase() };
+            return { baseUrl, ticketKey: issuesMatch[1].toUpperCase() };
         }
         return null;
     } catch {

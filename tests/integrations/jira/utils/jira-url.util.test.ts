@@ -33,4 +33,9 @@ describe("parseJiraUrl", () => {
         expect(result?.baseUrl).toBe("https://myteam.atlassian.net");
         expect(result?.ticketKey).toBe("ENG-7");
     });
+
+    it("should preserve a Server/Data Center context path in baseUrl", () => {
+        const result = parseJiraUrl("https://company.com/jira/browse/PROJ-123");
+        expect(result).toEqual({ baseUrl: "https://company.com/jira", ticketKey: "PROJ-123" });
+    });
 });
