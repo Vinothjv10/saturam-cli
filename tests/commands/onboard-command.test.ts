@@ -45,6 +45,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         mockOnboardingConfig = {
             configPath: "/mock/repo/.sateng/onboarding.json",
             localConfigExists: jest.fn().mockReturnValue(false),
+            isLocalConfigHandWritten: jest.fn().mockReturnValue(false),
             resolveConfigArgPath: jest.fn().mockImplementation((arg: string) => `/mock/cwd/${arg}`),
             parseSheetArg: jest.fn().mockImplementation((arg: string) => {
                 if (arg.includes("docs.google.com/spreadsheets")) {
@@ -561,6 +562,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
         it("re-checks the remembered sheet (from the personal config) when 'sat-cli onboard' is run with no argument and no local config exists", async () => {
             (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
             (mockOnboardingConfig.localConfigExists as jest.Mock).mockReturnValue(false);
+            (mockOnboardingConfig.isLocalConfigHandWritten as jest.Mock).mockReturnValue(false);
             const freshConfig = {
                 confluence: { baseUrl: "https://saturam.atlassian.net" },
                 projects: { Saturam: { jira: { tickets: ["NEW-1", "NEW-2"] } } },
@@ -581,9 +583,34 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             expect(mockOnboardService.sync).toHaveBeenCalledWith(freshConfig, dir.cwd, undefined);
         });
 
-        it("prefers an existing local .sateng/onboarding.json over a remembered sheet", async () => {
+        it("still re-checks the remembered sheet even when a local onboarding.json already exists, as long as it's sheet-derived (a cache, not hand-written)", async () => {
             (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
             (mockOnboardingConfig.localConfigExists as jest.Mock).mockReturnValue(true);
+            (mockOnboardingConfig.isLocalConfigHandWritten as jest.Mock).mockReturnValue(false);
+            const freshConfig = {
+                confluence: { baseUrl: "https://saturam.atlassian.net" },
+                projects: { Saturam: { jira: { tickets: ["NEW-1", "NEW-2"] } } },
+            };
+            (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockResolvedValue(freshConfig);
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
+            expect(mockOnboardService.resolveConfigFromSheet).toHaveBeenCalledWith(SHEET_ID);
+            expect(mockConfigService.loadOnboardingConfig).not.toHaveBeenCalled();
+            expect(mockOnboardService.sync).toHaveBeenCalledWith(freshConfig, dir.cwd, undefined);
+        });
+
+        it("prefers a hand-written local .sateng/onboarding.json over a remembered sheet from an unrelated project", async () => {
+            (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
+            (mockOnboardingConfig.localConfigExists as jest.Mock).mockReturnValue(true);
+            (mockOnboardingConfig.isLocalConfigHandWritten as jest.Mock).mockReturnValue(true);
 
             await command.execute({
                 configOrSheet: undefined,
@@ -595,6 +622,24 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             });
 
             expect(mockOnboardService.resolveConfigFromSheet).not.toHaveBeenCalled();
+            expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(mockOnboardingConfig.configPath);
+        });
+
+        it("falls back to the local sheet-derived cache when re-checking the remembered sheet fails", async () => {
+            (mockConfigService.getOnboardingSheetId as jest.Mock).mockResolvedValue(SHEET_ID);
+            (mockOnboardingConfig.localConfigExists as jest.Mock).mockReturnValue(true);
+            (mockOnboardingConfig.isLocalConfigHandWritten as jest.Mock).mockReturnValue(false);
+            (mockOnboardService.resolveConfigFromSheet as jest.Mock).mockRejectedValue(new Error("token expired"));
+
+            await command.execute({
+                configOrSheet: undefined,
+                "project-name": undefined,
+                "upload-to-s3": undefined,
+                list: undefined,
+                "knowledge-base": undefined,
+                chat: undefined,
+            });
+
             expect(mockConfigService.loadOnboardingConfig).toHaveBeenCalledWith(mockOnboardingConfig.configPath);
         });
 

@@ -35,6 +35,23 @@ describe("OnboardingConfigService", () => {
         });
     });
 
+    describe("isLocalConfigHandWritten", () => {
+        it("is false when no local file exists", () => {
+            expect(service.isLocalConfigHandWritten()).toBe(false);
+        });
+
+        it("is true for a local file with no _sourceGoogleSheetId marker", () => {
+            fs.mkdirSync(path.join(tmpDir, ".sateng"), { recursive: true });
+            fs.writeFileSync(service.configPath, JSON.stringify({ confluence: { baseUrl: "https://hand-written" } }));
+            expect(service.isLocalConfigHandWritten()).toBe(true);
+        });
+
+        it("is false for a local file generated from a sheet (has the marker)", () => {
+            service.saveResolvedConfig({ projects: {} }, "sheet-abc");
+            expect(service.isLocalConfigHandWritten()).toBe(false);
+        });
+    });
+
     describe("resolveConfigArgPath", () => {
         it("resolves a relative arg against the working directory's cwd, not the repo root", () => {
             const otherDir = new WorkingDirectory("/mock/user/cwd", "/mock/cli", "/mock/repo");

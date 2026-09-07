@@ -141,12 +141,13 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             return;
         }
 
-        // Explicit arg always wins. Otherwise: a local .sateng/onboarding.json takes precedence
-        // over a remembered sheet (so a hand-written config in one repo is never shadowed by a
-        // sheet synced from a different, unrelated repo) — only fall back to the remembered sheet
-        // when there's no local file to use, and fall back again to the local file (if any) if the
-        // remembered sheet's sync fails (e.g. an expired Google token, or the sheet was deleted).
-        if (!arg && !this.onboardingConfig.localConfigExists()) {
+        // Explicit arg always wins. Otherwise, a remembered sheet is always re-checked on every
+        // run (the local .sateng/onboarding.json it produced is just a cache of it, refreshed each
+        // time) — UNLESS the local file is hand-written (no _sourceGoogleSheetId marker), in which
+        // case it must never be silently shadowed by a sheet remembered from a different, unrelated
+        // repo. If the remembered sheet's sync fails (e.g. an expired Google token, or the sheet was
+        // deleted), fall back to the local file if one exists.
+        if (!arg && !this.onboardingConfig.isLocalConfigHandWritten()) {
             const rememberedSheetId = await this.configService.getOnboardingSheetId();
             if (rememberedSheetId) {
                 logger.info(
@@ -156,10 +157,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                     await this.syncFromSheet(rememberedSheetId, projectNameOverride, uploadToS3, force);
                     return;
                 } catch (err) {
+                    if (!this.onboardingConfig.localConfigExists()) throw err;
                     logger.warn(
-                        `Failed to sync the remembered onboarding sheet: ${(err as Error).message}. No local .sateng/onboarding.json to fall back to.`,
+                        `Failed to sync the remembered onboarding sheet: ${(err as Error).message}. Falling back to the local .sateng/onboarding.json.`,
                     );
-                    throw err;
                 }
             }
         }
