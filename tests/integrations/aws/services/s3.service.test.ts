@@ -115,26 +115,4 @@ describe("S3Service", () => {
             );
         });
     });
-
-    describe("ensurePrefixExists", () => {
-        it("does nothing if the folder prefix already has objects", async () => {
-            mockSend.mockResolvedValueOnce({ Contents: [{ Key: "docs/saturam/" }], IsTruncated: false });
-
-            await service.ensurePrefixExists("saturam");
-
-            // Only the list call, no put
-            expect(mockSend).toHaveBeenCalledTimes(1);
-        });
-
-        it("creates a zero-byte marker object when the folder prefix is empty", async () => {
-            mockSend.mockResolvedValueOnce({ Contents: [], IsTruncated: false }).mockResolvedValueOnce({});
-
-            await service.ensurePrefixExists("saturam");
-
-            expect(mockSend).toHaveBeenCalledTimes(2);
-            expect(mockSend).toHaveBeenLastCalledWith(
-                expect.objectContaining({ input: { Bucket: "my-bucket", Key: "docs/saturam/", Body: "" } }),
-            );
-        });
-    });
 });

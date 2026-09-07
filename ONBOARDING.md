@@ -176,7 +176,7 @@ If you don't have a `.sateng/onboarding.json` yet, generate one with example Con
 sat-cli onboard --format
 ```
 
-This writes the template to `.sateng/onboarding.json` in the current directory. If that file already exists, it writes to `.sateng/onboarding.sample.json` instead so your existing config is never overwritten. Edit the generated file with your real page IDs, ticket keys, and document IDs, then run `sat-cli onboard` to sync.
+This writes the template to `.sateng/onboarding.json` at the repository root. If that file already exists, it writes to `.sateng/onboarding.sample.json` instead so your existing config is never overwritten. Edit the generated file with your real page IDs, ticket keys, and document IDs, then run `sat-cli onboard` to sync.
 
 #### Mode B: Sync Directly from a Google Sheet
 
@@ -188,9 +188,9 @@ npx ts-node src/entrypoints/main.ts onboard <spreadsheet_url_or_id>
 
 `sat-cli onboard` reads the first tab of the sheet and picks one of two modes based on its header row:
 
-- **Structured project sheet** — if the header row contains a `project_name` column, the sheet is parsed directly into the same shape as `.sateng/onboarding.json` (one row per project). See [`onboarding-sheet-template.csv`](onboarding-sheet-template.csv) for the full column reference — import it into Google Sheets (File → Import) as a starting point, or copy its header row into a new sheet. Multi-value columns (`confluence_pages`, `jira_tickets`, `google_docs`, `onboarding_sheet_ids`) are comma-separated within a cell. The resolved config is also written to `.sateng/onboarding.json` in the current directory before syncing (tagged with a `_sourceGoogleSheetId` field, for reference only — it's not what drives re-checking, see below).
+- **Structured project sheet** — if the header row contains a `project_name` column, the sheet is parsed directly into the same shape as `.sateng/onboarding.json` (one row per project). See [`onboarding-sheet-template.csv`](onboarding-sheet-template.csv) for the full column reference — import it into Google Sheets (File → Import) as a starting point, or copy its header row into a new sheet. Multi-value columns (`confluence_pages`, `jira_tickets`, `google_docs`, `onboarding_sheet_ids`) are comma-separated within a cell. The resolved config is also written to `.sateng/onboarding.json` at the repository root before syncing (tagged with a `_sourceGoogleSheetId` field, for reference only — it's not what drives re-checking, see below).
 
-  **Re-checking the sheet on later runs**: the sheet's ID is remembered in your personal config (`~/.config/sateng/config.json`, alongside your Google access token), not in the local `.sateng/onboarding.json` file. That means plain `sat-cli onboard` (no argument) — **run from any directory** — automatically re-fetches that same sheet and overwrites the local `.sateng/onboarding.json` in the current directory each time, so editing values in the sheet and just running `sat-cli onboard` again always picks up the latest columns. Passing an explicit config file path (`sat-cli onboard path/to/config.json`) always bypasses this and loads that file directly instead.
+  **Re-checking the sheet on later runs**: the sheet's ID is remembered in your personal config (`~/.config/sateng/config.json`, alongside your Google access token), not in the local `.sateng/onboarding.json` file. That means plain `sat-cli onboard` (no argument) — **run from any directory** — automatically re-fetches that same sheet and overwrites `.sateng/onboarding.json` at the repository root each time, so editing values in the sheet and just running `sat-cli onboard` again always picks up the latest columns. Passing an explicit config file path (`sat-cli onboard path/to/config.json`) always bypasses this and loads that file directly instead.
 - **Sheet of links** (legacy) — if there's no `project_name` column, every cell is scanned for Confluence/Jira/Google Doc/Sheet URLs instead, with each sheet tab treated as its own project (see [Google Sheets URL Resolution & Project Tab Mapping](#google-sheets-url-resolution--project-tab-mapping) above).
 
 #### Syncing a Single Project

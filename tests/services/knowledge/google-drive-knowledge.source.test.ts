@@ -98,4 +98,14 @@ describe("GoogleDriveKnowledgeSource", () => {
     it("should throw if id is missing", async () => {
         await expect(source.fetch("")).rejects.toThrow("Google Document ID is missing or invalid.");
     });
+
+    it("should refuse to sync a file that's in the trash", async () => {
+        mockGoogleDrive.getFileMetadata.mockResolvedValue({
+            name: "Deleted Doc",
+            mimeType: "application/vnd.google-apps.document",
+            trashed: true,
+        } as any);
+
+        await expect(source.fetch("doc-id-trashed")).rejects.toThrow(/is in the trash/);
+    });
 });

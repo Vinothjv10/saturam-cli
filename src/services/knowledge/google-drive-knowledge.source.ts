@@ -1,6 +1,5 @@
 import { getLogger } from "log4js";
 import { Service } from "typedi";
-import * as mammoth from "mammoth";
 import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
 import { HtmlNormalizerService } from "../normalizers/html-normalizer.service";
 import { KnowledgeDocument, KnowledgeSource, KnowledgeSourceType } from "./knowledge-source.model";
@@ -37,6 +36,9 @@ export class GoogleDriveKnowledgeSource implements KnowledgeSource {
 
         // 1. Fetch raw metadata to get title and mimeType
         const metadata = await this.googleDrive.getFileMetadata(id);
+        if (metadata.trashed) {
+            throw new Error(`Google Drive document "${metadata.name ?? id}" (${id}) is in the trash — skipping.`);
+        }
         const title = metadata.name ?? id;
         const mimeType = metadata.mimeType ?? "";
 
@@ -65,12 +67,18 @@ export class GoogleDriveKnowledgeSource implements KnowledgeSource {
                     throw new Error(`File "${id}" does not appear to be a valid DOCX (invalid ZIP header)`);
                 }
 
+                // Imported lazily — most invocations never touch a .docx, so there's no reason
+                // to pay mammoth's load cost on every CLI run.
+                const mammoth = await import("mammoth");
                 const result = await mammoth.convertToHtml({ buffer });
                 if (result.messages && result.messages.length > 0) {
-                    logger.warn(
-                        `Mammoth conversion warnings for document "${title}" (${id}): ${JSON.stringify(
-                            result.messages,
-                        )}`,
+                    const preview = result.messages
+                        .slice(0, 3)
+                        .map((m) => m.message)
+                        .join("; ");
+                    const more = result.messages.length > 3 ? ` (+${result.messages.length - 3} more)` : "";
+                    logger.debug(
+                        `Mammoth conversion had ${result.messages.length} note(s) for document "${title}" (${id}): ${preview}${more}`,
                     );
                 }
                 return this.html.convertHtmlToMarkdown(result.value);

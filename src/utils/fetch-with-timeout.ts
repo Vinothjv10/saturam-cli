@@ -37,6 +37,9 @@ function parseRetryAfterMs(response: Response): number | null {
 async function fetchOnce(url: string, init: RequestInit, ms: number): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), ms);
+    // Don't let this timer alone keep the Node process alive — if all real work is done and this
+    // is the only pending handle, the CLI should exit immediately rather than wait out the timeout.
+    timeoutId.unref?.();
 
     try {
         const rawResponse = await fetch(url, { ...init, signal: controller.signal });

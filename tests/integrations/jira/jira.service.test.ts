@@ -91,7 +91,7 @@ describe("JiraService", () => {
             );
 
             expect(mockFetch).toHaveBeenCalledWith(
-                "https://saturam.atlassian.net/rest/api/3/issue/ENG-101",
+                expect.stringMatching(/^https:\/\/saturam\.atlassian\.net\/rest\/api\/3\/issue\/ENG-101\?fields=/),
                 expect.objectContaining({
                     headers: {
                         Accept: "application/json",
@@ -257,6 +257,69 @@ describe("JiraService", () => {
                 "https://saturam.atlassian.net/rest/api/3/search/jql?jql=project%20%3D%20ENG&maxResults=100&fields=summary%2Cstatus%2Cassignee%2Cpriority%2Cissuetype%2Clabels&nextPageToken=token-page-2",
                 expect.any(Object),
             );
+        });
+    });
+
+    describe("listAllComments", () => {
+        let originalFetch: typeof fetch;
+
+        beforeAll(() => {
+            originalFetch = global.fetch;
+        });
+
+        afterAll(() => {
+            global.fetch = originalFetch;
+        });
+
+        it("auto-paginates until every comment (per the reported total) has been fetched", async () => {
+            mockConfigService.getJiraCredentials.mockResolvedValue({ token: "bearer-token-val" });
+
+            const mockFetch = jest
+                .fn()
+                .mockResolvedValueOnce({
+                    ok: true,
+                    json: jest.fn().mockResolvedValue({
+                        comments: [{ id: "1" }, { id: "2" }],
+                        total: 3,
+                    }),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    json: jest.fn().mockResolvedValue({
+                        comments: [{ id: "3" }],
+                        total: 3,
+                    }),
+                });
+            global.fetch = mockFetch as any;
+
+            const result = await service.listAllComments("https://saturam.atlassian.net", "ENG-1");
+
+            expect(result).toEqual([{ id: "1" }, { id: "2" }, { id: "3" }]);
+            expect(mockFetch).toHaveBeenCalledTimes(2);
+            expect(mockFetch).toHaveBeenNthCalledWith(
+                1,
+                "https://saturam.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=0&maxResults=100",
+                expect.any(Object),
+            );
+            expect(mockFetch).toHaveBeenNthCalledWith(
+                2,
+                "https://saturam.atlassian.net/rest/api/3/issue/ENG-1/comment?startAt=2&maxResults=100",
+                expect.any(Object),
+            );
+        });
+
+        it("stops when a page returns no comments even if total looks larger", async () => {
+            mockConfigService.getJiraCredentials.mockResolvedValue({ token: "bearer-token-val" });
+            const mockFetch = jest.fn().mockResolvedValue({
+                ok: true,
+                json: jest.fn().mockResolvedValue({ comments: [], total: 3 }),
+            });
+            global.fetch = mockFetch as any;
+
+            const result = await service.listAllComments("https://saturam.atlassian.net", "ENG-1");
+
+            expect(result).toEqual([]);
+            expect(mockFetch).toHaveBeenCalledTimes(1);
         });
     });
 

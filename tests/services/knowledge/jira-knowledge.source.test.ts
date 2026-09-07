@@ -10,6 +10,7 @@ describe("JiraKnowledgeSource", () => {
     beforeEach(() => {
         mockJira = {
             getIssue: jest.fn(),
+            listAllComments: jest.fn(),
         } as any;
         adf = new AdfNormalizerService();
         source = new JiraKnowledgeSource(mockJira, adf);
@@ -80,6 +81,60 @@ describe("JiraKnowledgeSource", () => {
 
         expect(doc.content).toContain("Comment by Carol");
         expect(doc.content).toContain("LGTM!");
+    });
+
+    it("fetches the full comment list when the embedded page is truncated", async () => {
+        mockJira.getIssue.mockResolvedValue({
+            key: "TST-3",
+            fields: {
+                summary: "Big thread",
+                status: { name: "Open" },
+                labels: [],
+                comment: { comments: [{ author: { displayName: "A" }, body: { type: "doc" } }], total: 50 },
+            },
+        } as any);
+        mockJira.listAllComments.mockResolvedValue(
+            Array.from({ length: 50 }, (_, i) => ({
+                author: { displayName: `User${i}` },
+                created: "2026-07-01T10:00:00Z",
+                body: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: `c${i}` }] }] },
+            })),
+        );
+
+        const doc = await source.fetch("TST-3", { baseUrl: "https://jira.example.com" });
+
+        expect(mockJira.listAllComments).toHaveBeenCalledWith("https://jira.example.com", "TST-3");
+        expect(doc.content).toContain("Comment by User0");
+        expect(doc.content).toContain("Comment by User49");
+    });
+
+    it("does not throw and omits the date when a comment's created timestamp is invalid", async () => {
+        mockJira.getIssue.mockResolvedValue({
+            key: "TST-4",
+            fields: {
+                summary: "Bad date",
+                status: { name: "Open" },
+                labels: [],
+                comment: {
+                    comments: [
+                        {
+                            author: { displayName: "Carol" },
+                            created: "not-a-real-date",
+                            body: {
+                                type: "doc",
+                                content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+                            },
+                        },
+                    ],
+                    total: 1,
+                },
+            },
+        } as any);
+
+        const doc = await source.fetch("TST-4", { baseUrl: "https://jira.example.com" });
+
+        expect(doc.content).toContain("Comment by Carol");
+        expect(doc.content).not.toContain("Invalid Date");
     });
 
     it("should throw if id is missing", async () => {

@@ -322,8 +322,10 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
 
             if (awsProfile) {
                 try {
-                    const { execSync } = require("child_process");
-                    execSync(`aws sts get-caller-identity --profile ${awsProfile}`, { stdio: "pipe" });
+                    const { execFileSync } = require("child_process");
+                    // execFileSync (no shell) instead of building a shell command string —
+                    // awsProfile is user-typed input and must never be shell-interpolated.
+                    execFileSync("aws", ["sts", "get-caller-identity", "--profile", awsProfile], { stdio: "pipe" });
                     logger.info(`AWS profile '${awsProfile}' verified successfully.`);
                 } catch {
                     logger.warn(`Warning: Could not verify AWS profile '${awsProfile}'. Make sure it's configured.`);
@@ -516,8 +518,8 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
         // Verify AWS credentials if profile given
         if (awsProfile) {
             try {
-                const { execSync } = require("child_process");
-                execSync(`aws sts get-caller-identity --profile ${awsProfile}`, { stdio: "pipe" });
+                const { execFileSync } = require("child_process");
+                execFileSync("aws", ["sts", "get-caller-identity", "--profile", awsProfile], { stdio: "pipe" });
                 logger.info(`AWS profile '${awsProfile}' verified successfully.`);
             } catch {
                 logger.warn(`Warning: Could not verify AWS profile '${awsProfile}'. Make sure it's configured.`);

@@ -15,13 +15,17 @@ export interface RetrievedChunk {
 @Service()
 export class BedrockKnowledgeBaseService {
     private client: import("@aws-sdk/client-bedrock-agent-runtime").BedrockAgentRuntimeClient | undefined;
+    private clientRegion: string | undefined;
 
     constructor(private readonly config: ConfigService) {}
 
     private async getClient(
         region: string,
     ): Promise<import("@aws-sdk/client-bedrock-agent-runtime").BedrockAgentRuntimeClient> {
-        if (this.client) return this.client;
+        // Cached client is only valid for the region it was built with — a Knowledge Base can be
+        // configured in a different region from a previous call, so a stale cache would silently
+        // keep querying the wrong region instead of honoring the one just requested.
+        if (this.client && this.clientRegion === region) return this.client;
 
         const { BedrockAgentRuntimeClient } = await import("@aws-sdk/client-bedrock-agent-runtime");
         const cloudConfig = await this.config.getAWSCloudConfig();
@@ -30,6 +34,7 @@ export class BedrockKnowledgeBaseService {
         // A Knowledge Base can be configured in a different region from the
         // default AWS/S3 region, so its explicit region must win here.
         this.client = new BedrockAgentRuntimeClient({ ...clientConfig, region });
+        this.clientRegion = region;
         return this.client;
     }
 

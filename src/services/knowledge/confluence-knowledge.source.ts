@@ -63,9 +63,12 @@ export class ConfluenceKnowledgeSource implements KnowledgeSource {
             }
         })();
 
-        // 4. Build final Markdown content
-        const baseOrigin = new URL(baseUrl).origin;
-        const docUrl = `${baseOrigin}/wiki/spaces/${spaceKey}/pages/${id}`;
+        // 4. Build final Markdown content — prefer the real URL Confluence itself returns
+        // (_links.base + _links.webui) over guessing a Cloud-shaped "/wiki/spaces/.../pages/..."
+        // path, which is wrong for Server/Data Center and drops any context path in the base URL.
+        const docUrl = data._links?.webui
+            ? `${(data._links.base ?? baseUrl).replace(/\/$/, "")}${data._links.webui}`
+            : `${new URL(baseUrl).origin}/wiki/spaces/${spaceKey}/pages/${id}`;
 
         const content =
             `# ${title}

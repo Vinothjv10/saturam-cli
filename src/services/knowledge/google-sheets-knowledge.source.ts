@@ -1,6 +1,7 @@
 import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
+import { quoteSheetTitle } from "../../utils/google-sheets-a1.util";
 import { KnowledgeDocument, KnowledgeSource, KnowledgeSourceType } from "./knowledge-source.model";
 
 const logger = getLogger("GoogleSheetsKnowledgeSource");
@@ -28,7 +29,10 @@ export class GoogleSheetsKnowledgeSource implements KnowledgeSource {
         const spreadsheet = await this.googleDrive.getSpreadsheetMetadata(id);
         const title = spreadsheet.title ?? id;
         const firstSheetTitle = spreadsheet.sheets?.[0]?.title ?? "Sheet1";
-        const effectiveRange = options?.range ?? firstSheetTitle;
+        // A user-supplied range is trusted as-is (already valid A1 syntax, e.g. "Sheet1!A1:E100"
+        // per the documented config format); only the auto-derived default tab name needs
+        // quoting, since a title containing a space isn't valid A1 syntax unquoted.
+        const effectiveRange = options?.range ?? quoteSheetTitle(firstSheetTitle);
 
         // 2. Fetch cell values
         const batchData = await this.googleDrive.batchGetSpreadsheetValues(id, [effectiveRange]);
@@ -68,7 +72,9 @@ export class GoogleSheetsKnowledgeSource implements KnowledgeSource {
             content,
             url: `https://docs.google.com/spreadsheets/d/${id}`,
             metadata: {
-                updatedAt: new Date().toISOString(),
+                // The spreadsheet's actual last-modified time, not the moment it happened to be
+                // fetched — falls back to "now" only if Drive didn't report one.
+                updatedAt: spreadsheet.modifiedTime ?? new Date().toISOString(),
             },
             sheetRows: allRows as string[][],
             sheetRange: effectiveRange,

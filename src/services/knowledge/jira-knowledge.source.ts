@@ -58,10 +58,17 @@ export class JiraKnowledgeSource implements KnowledgeSource {
             }
         })();
 
-        const rawComments: JiraComment[] = fields?.comment?.comments || [];
+        // The comments embedded in getIssue()'s response are capped at Jira's default page
+        // size — fetch the full, paginated list separately so long comment threads aren't
+        // silently truncated.
+        const totalComments = fields?.comment?.total ?? 0;
+        const rawComments: JiraComment[] =
+            totalComments > (fields?.comment?.comments?.length ?? 0)
+                ? await this.jira.listAllComments(baseUrl, id)
+                : fields?.comment?.comments || [];
         const commentsMarkdown = rawComments.map((c) => {
             const author = c.author?.displayName || "User";
-            const date = c.created ? new Date(c.created).toISOString() : "";
+            const date = this.formatDate(c.created);
             const body = (() => {
                 try {
                     return c.body ? this.adf.renderAdfNode(c.body) : "";
@@ -109,5 +116,12 @@ ${commentsMarkdown.length > 0 ? `## Comments\n\n${commentsMarkdown.join("\n")}` 
                 labels,
             },
         };
+    }
+
+    /** Safely formats a Jira date string, returning "" for missing/invalid input instead of throwing. */
+    private formatDate(value: string | undefined): string {
+        if (!value) return "";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? "" : date.toISOString();
     }
 }

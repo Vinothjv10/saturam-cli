@@ -3,8 +3,7 @@ import { OnboardCommand } from "../../src/commands/onboard-command";
 import { OnboardService } from "../../src/services/onboarding/onboard.service";
 import { ConfigService } from "../../src/services/config-service";
 import { OnboardingConfigService } from "../../src/services/onboarding/onboarding-config.service";
-import { BedrockKnowledgeBaseService } from "../../src/integrations/aws/services/bedrock-knowledge-base.service";
-import { LlmService } from "../../src/services/llm-service";
+import { KnowledgeBaseChatService } from "../../src/services/knowledge/knowledge-base-chat.service";
 import { WorkingDirectory } from "../../src/utils/working-directory";
 
 jest.mock("@inquirer/prompts", () => ({
@@ -16,9 +15,21 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     let mockOnboardService: jest.Mocked<OnboardService>;
     let mockConfigService: jest.Mocked<ConfigService>;
     let mockOnboardingConfig: jest.Mocked<OnboardingConfigService>;
-    let mockKnowledgeBase: jest.Mocked<BedrockKnowledgeBaseService>;
-    let mockLlmService: jest.Mocked<LlmService>;
+    let mockChatService: jest.Mocked<KnowledgeBaseChatService>;
     let dir: WorkingDirectory;
+    let originalStdinIsTTY: boolean | undefined;
+
+    beforeAll(() => {
+        originalStdinIsTTY = process.stdin.isTTY;
+        // The REPL modes (--knowledge-base/--chat) refuse to prompt on a non-TTY stdin (real
+        // pipes/redirects can't be typed into) — force it on so mocked `input()` drives the loop
+        // the way an interactive terminal would.
+        Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    });
+
+    afterAll(() => {
+        Object.defineProperty(process.stdin, "isTTY", { value: originalStdinIsTTY, configurable: true });
+    });
 
     beforeEach(() => {
         jest.clearAllMocks();
@@ -57,24 +68,14 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             writeSampleConfig: jest.fn(),
         } as any;
 
-        mockKnowledgeBase = {
-            retrieve: jest.fn().mockResolvedValue([]),
-        } as any;
-
-        mockLlmService = {
-            prompt: jest.fn().mockResolvedValue("Here is the answer."),
+        mockChatService = {
+            search: jest.fn().mockResolvedValue([]),
+            ask: jest.fn().mockResolvedValue({ answer: "Here is the answer.", chunks: [] }),
         } as any;
 
         dir = new WorkingDirectory("/mock/cwd", "/mock/cli", "/mock/repo");
 
-        command = new OnboardCommand(
-            mockOnboardService,
-            mockConfigService,
-            mockOnboardingConfig,
-            mockKnowledgeBase,
-            mockLlmService,
-            dir,
-        );
+        command = new OnboardCommand(mockOnboardService, mockConfigService, mockOnboardingConfig, mockChatService, dir);
     });
 
     it("should route to Google Sheet mode when passed a Google Sheets URL", async () => {
@@ -240,6 +241,25 @@ describe("OnboardCommand Dual-Mode Routing", () => {
     });
 
     describe("--knowledge-base interactive search", () => {
+        it("exits immediately without prompting when stdin is not a TTY", async () => {
+            Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+            try {
+                await command.execute({
+                    configOrSheet: undefined,
+                    "project-name": undefined,
+                    "upload-to-s3": undefined,
+                    list: undefined,
+                    "knowledge-base": true,
+                    chat: undefined,
+                });
+            } finally {
+                Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+            }
+
+            expect(input).not.toHaveBeenCalled();
+            expect(mockChatService.search).not.toHaveBeenCalled();
+        });
+
         it("skips syncing entirely and enters the search loop", async () => {
             (input as jest.Mock).mockResolvedValueOnce("");
 
@@ -275,7 +295,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 chat: undefined,
             });
 
-            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+            expect(mockChatService.search).not.toHaveBeenCalled();
         });
 
         it("exits on 'exit' or 'quit' (case-insensitive)", async () => {
@@ -290,7 +310,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 chat: undefined,
             });
 
-            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+            expect(mockChatService.search).not.toHaveBeenCalled();
         });
 
         it("treats Ctrl+C as a normal exit", async () => {
@@ -309,7 +329,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 }),
             ).resolves.toBeUndefined();
 
-            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
+            expect(mockChatService.search).not.toHaveBeenCalled();
         });
 
         it("retrieves results for each question until exit", async () => {
@@ -317,7 +337,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 .mockResolvedValueOnce("what is the auth flow?")
                 .mockResolvedValueOnce("what is onboarding?")
                 .mockResolvedValueOnce("");
-            (mockKnowledgeBase.retrieve as jest.Mock)
+            (mockChatService.search as jest.Mock)
                 .mockResolvedValueOnce([{ content: "chunk one", score: 0.9, location: "s3://bucket/key.md" }])
                 .mockResolvedValueOnce([]);
 
@@ -330,14 +350,16 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 chat: undefined,
             });
 
-            expect(mockKnowledgeBase.retrieve).toHaveBeenCalledTimes(2);
-            expect(mockKnowledgeBase.retrieve).toHaveBeenNthCalledWith(1, "what is the auth flow?");
-            expect(mockKnowledgeBase.retrieve).toHaveBeenNthCalledWith(2, "what is onboarding?");
+            expect(mockChatService.search).toHaveBeenCalledTimes(2);
+            expect(mockChatService.search).toHaveBeenNthCalledWith(1, "what is the auth flow?", {
+                project: undefined,
+            });
+            expect(mockChatService.search).toHaveBeenNthCalledWith(2, "what is onboarding?", { project: undefined });
         });
 
         it("logs an error and keeps looping when retrieve throws", async () => {
             (input as jest.Mock).mockResolvedValueOnce("bad query").mockResolvedValueOnce("");
-            (mockKnowledgeBase.retrieve as jest.Mock).mockRejectedValueOnce(new Error("KB not configured"));
+            (mockChatService.search as jest.Mock).mockRejectedValueOnce(new Error("KB not configured"));
 
             await expect(
                 command.execute({
@@ -370,8 +392,7 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             await command.execute(chatInputs);
 
             expect(input).not.toHaveBeenCalled();
-            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
-            expect(mockLlmService.prompt).not.toHaveBeenCalled();
+            expect(mockChatService.ask).not.toHaveBeenCalled();
             expect(mockOnboardService.sync).not.toHaveBeenCalled();
         });
 
@@ -379,11 +400,13 @@ describe("OnboardCommand Dual-Mode Routing", () => {
             const stdoutIsTTY = process.stdout.isTTY;
             Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
             (input as jest.Mock).mockResolvedValueOnce("what is the auth flow?").mockResolvedValueOnce("");
-            (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
-                { content: "auth uses OAuth2", score: 0.95, location: "s3://bucket/auth.md" },
-                { content: "more auth context", score: 0.92, location: "s3://bucket/auth.md" },
-            ]);
-            (mockLlmService.prompt as jest.Mock).mockResolvedValueOnce("The auth flow uses OAuth2. [1]");
+            (mockChatService.ask as jest.Mock).mockResolvedValueOnce({
+                answer: "The auth flow uses OAuth2. [1]",
+                chunks: [
+                    { content: "auth uses OAuth2", score: 0.95, location: "s3://bucket/auth.md" },
+                    { content: "more auth context", score: 0.92, location: "s3://bucket/auth.md" },
+                ],
+            });
 
             try {
                 await command.execute(chatInputs);
@@ -391,32 +414,25 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                 Object.defineProperty(process.stdout, "isTTY", { value: stdoutIsTTY, configurable: true });
             }
 
-            expect(mockKnowledgeBase.retrieve).toHaveBeenCalledWith("what is the auth flow?");
-            expect(mockLlmService.prompt).toHaveBeenCalledTimes(1);
-            const [messages] = (mockLlmService.prompt as jest.Mock).mock.calls[0];
-            expect(messages).toHaveLength(2);
-            expect(String(messages[1].content)).toContain("auth uses OAuth2");
-            expect(String(messages[1].content)).toContain("what is the auth flow?");
+            expect(mockChatService.ask).toHaveBeenCalledWith("what is the auth flow?", { project: undefined });
             expect((command as any).renderAnswer("The auth flow uses OAuth2. [1]")).toBe("The auth flow uses OAuth2.");
         });
 
-        it("normalizes --project and scopes both Bedrock retrieval and the LLM prompt", async () => {
+        it("normalizes --project and scopes the chat service call", async () => {
             (input as jest.Mock).mockResolvedValueOnce("give me the overview").mockResolvedValueOnce("");
-            (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
-                {
-                    content: "Saturam Core overview",
-                    location: "s3://bucket/saturam-core/google-docs/overview.md",
-                },
-            ]);
+            (mockChatService.ask as jest.Mock).mockResolvedValueOnce({
+                answer: "Saturam Core overview answer",
+                chunks: [
+                    {
+                        content: "Saturam Core overview",
+                        location: "s3://bucket/saturam-core/google-docs/overview.md",
+                    },
+                ],
+            });
 
             await command.execute({ ...chatInputs, project: "Saturam Core" });
 
-            expect(mockKnowledgeBase.retrieve).toHaveBeenCalledWith("give me the overview", {
-                project: "saturam-core",
-            });
-            const [messages] = (mockLlmService.prompt as jest.Mock).mock.calls[0];
-            expect(String(messages[0].content)).toContain('selected project "saturam-core"');
-            expect(String(messages[1].content)).toContain("Selected project: saturam-core");
+            expect(mockChatService.ask).toHaveBeenCalledWith("give me the overview", { project: "saturam-core" });
         });
 
         it("shows a terminal loading spinner while waiting for the chat answer", async () => {
@@ -426,14 +442,11 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             try {
                 (input as jest.Mock).mockResolvedValueOnce("what is onboarding?").mockResolvedValueOnce("");
-                (mockKnowledgeBase.retrieve as jest.Mock).mockResolvedValueOnce([
-                    { content: "onboarding docs", score: 0.9, location: "s3://bucket/onboarding.md" },
-                ]);
 
-                let resolveAnswer!: (answer: string) => void;
-                (mockLlmService.prompt as jest.Mock).mockImplementationOnce(
+                let resolveAnswer!: (result: { answer: string; chunks: unknown[] }) => void;
+                (mockChatService.ask as jest.Mock).mockImplementationOnce(
                     () =>
-                        new Promise<string>((resolve) => {
+                        new Promise((resolve) => {
                             resolveAnswer = resolve;
                         }),
                 );
@@ -447,7 +460,10 @@ describe("OnboardCommand Dual-Mode Routing", () => {
                     expect.stringContaining("Retrieving context and generating answer"),
                 );
 
-                resolveAnswer("Onboarding is documented. [1]");
+                resolveAnswer({
+                    answer: "Onboarding is documented. [1]",
+                    chunks: [{ content: "onboarding docs", score: 0.9, location: "s3://bucket/onboarding.md" }],
+                });
                 await run;
 
                 expect(writeSpy).toHaveBeenCalledWith(expect.stringMatching(/^\r\s+\r$/));
@@ -459,20 +475,19 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
         it("logs an error and keeps looping when the LLM call throws", async () => {
             (input as jest.Mock).mockResolvedValueOnce("bad query").mockResolvedValueOnce("");
-            (mockLlmService.prompt as jest.Mock).mockRejectedValueOnce(new Error("No API key found"));
+            (mockChatService.ask as jest.Mock).mockRejectedValueOnce(new Error("No API key found"));
 
             await expect(command.execute(chatInputs)).resolves.toBeUndefined();
 
             expect(input).toHaveBeenCalledTimes(2);
         });
 
-        it("exits immediately on blank input without calling retrieve or the LLM", async () => {
+        it("exits immediately on blank input without calling the chat service", async () => {
             (input as jest.Mock).mockResolvedValueOnce("");
 
             await command.execute(chatInputs);
 
-            expect(mockKnowledgeBase.retrieve).not.toHaveBeenCalled();
-            expect(mockLlmService.prompt).not.toHaveBeenCalled();
+            expect(mockChatService.ask).not.toHaveBeenCalled();
         });
     });
 
@@ -491,6 +506,20 @@ describe("OnboardCommand Dual-Mode Routing", () => {
 
             expect(mockConfigService.setOnboardingSheetId).toHaveBeenCalledWith(undefined);
             expect(mockOnboardService.sync).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("mutually exclusive mode flags", () => {
+        it("rejects combining two mode flags instead of silently picking one", async () => {
+            await expect(command.execute({ format: true, list: true } as any)).rejects.toThrow(/mutually exclusive/);
+            expect(mockOnboardingConfig.writeSampleConfig).not.toHaveBeenCalled();
+            expect(mockOnboardService.listSyncedDocuments).not.toHaveBeenCalled();
+        });
+
+        it("rejects combining --chat and --knowledge-base", async () => {
+            await expect(command.execute({ chat: true, "knowledge-base": true } as any)).rejects.toThrow(
+                /mutually exclusive/,
+            );
         });
     });
 

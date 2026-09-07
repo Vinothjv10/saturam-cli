@@ -42,6 +42,25 @@ describe("ConfluenceKnowledgeSource", () => {
         expect(doc.metadata.updatedAt).toBe("2026-06-15");
     });
 
+    it("uses the real _links.base + _links.webui URL from the API instead of guessing a Cloud-shaped path", async () => {
+        mockConfluence.getPage.mockResolvedValue({
+            id: "12345",
+            title: "Self-Hosted Page",
+            body: { storage: { value: "<p>hi</p>" } },
+            version: { number: 1 },
+            space: { key: "ARCH" },
+            metadata: { labels: { results: [] } },
+            _links: {
+                base: "https://company.com/confluence",
+                webui: "/pages/viewpage.action?pageId=12345",
+            },
+        } as any);
+
+        const doc = await source.fetch("12345", { baseUrl: "https://company.com/confluence" });
+
+        expect(doc.url).toBe("https://company.com/confluence/pages/viewpage.action?pageId=12345");
+    });
+
     it("should use '_No Content_' when body is empty", async () => {
         mockConfluence.getPage.mockResolvedValue({
             id: "99",

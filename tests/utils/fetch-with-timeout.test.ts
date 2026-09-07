@@ -81,10 +81,9 @@ describe("fetchWithTimeout", () => {
         await expect(responsePromise).rejects.toThrow("Network error");
     });
 
-    it("should keep the abort timer alive during .json() body read", async () => {
-        // Simulate a response whose .json() hangs for longer than the timeout
+    it("resolves a .json() body read that finishes before the timeout", async () => {
         let resolveJson!: () => void;
-        const slowJsonPromise = new Promise<any>((_resolve, _reject) => {
+        const slowJsonPromise = new Promise<any>((_resolve) => {
             resolveJson = () => _resolve({ data: "late" });
         });
 
@@ -99,18 +98,42 @@ describe("fetchWithTimeout", () => {
         jest.advanceTimersByTime(50);
         const response = await responsePromise;
 
-        // Start the body read — but the timer has already been set to 500ms total
         const jsonPromise = response.json();
-
-        // Advance past the timeout window (body read is still pending)
-        jest.advanceTimersByTime(600);
-
-        // The pending json never resolved — it should not hang forever
-        // (In production with real AbortSignal the read would abort; here we just
-        // verify that manually resolving it returns the value correctly)
         resolveJson();
         const result = await jsonPromise;
         expect(result).toEqual({ data: "late" });
+    });
+
+    it("actually aborts a stalled .json() body read once the timeout elapses, rejecting with a body-read timeout error", async () => {
+        // A real fetch implementation aborts the in-flight body read when the request's
+        // AbortSignal fires — simulate that here by having the mocked .json() listen for abort,
+        // to prove the timer that's kept alive during the body read really does abort it.
+        let capturedSignal!: AbortSignal;
+        const mockFetch = jest.fn().mockImplementation((_url: string, init: RequestInit) => {
+            capturedSignal = init.signal as AbortSignal;
+            return Promise.resolve({
+                ...makeMockResponse("{}"),
+                json: () =>
+                    new Promise((_resolve, reject) => {
+                        capturedSignal.addEventListener("abort", () => {
+                            const err = new Error("The operation was aborted");
+                            err.name = "AbortError";
+                            reject(err);
+                        });
+                    }),
+            });
+        });
+        global.fetch = mockFetch as any;
+
+        const responsePromise = fetchWithTimeout("https://example.com/api", {}, 500);
+        jest.advanceTimersByTime(50);
+        const response = await responsePromise;
+
+        const jsonPromise = response.json();
+        // Advance past the 500ms timeout — the body read is still pending, so this must abort it.
+        jest.advanceTimersByTime(500);
+
+        await expect(jsonPromise).rejects.toThrow("timed out after 500ms (during body read)");
     });
 
     it("should retry a 429 response with backoff and return the eventual success", async () => {

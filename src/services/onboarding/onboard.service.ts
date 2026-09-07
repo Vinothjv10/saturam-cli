@@ -10,6 +10,14 @@ import { JiraService } from "../../integrations/jira/services/jira.service";
 import { parseJiraUrl } from "../../integrations/jira/utils/jira-url.util";
 import { parseGoogleDocUrl, parseGoogleSheetUrl } from "../../integrations/google-drive/utils/google-drive-url.util";
 import { ConfigService } from "../config-service";
+import {
+    OnboardPageSchema,
+    OnboardTicketSchema,
+    OnboardDocSchema,
+    OnboardGoogleSheetsConfig,
+    OnboardConfig,
+    OnboardConfigSchema,
+} from "./onboarding-config.schema";
 import { GoogleDriveService } from "../../integrations/google-drive/services/google-drive.service";
 import { S3Service } from "../../integrations/aws/services/s3.service";
 import { JiraKnowledgeSource } from "../knowledge/jira-knowledge.source";
@@ -17,37 +25,10 @@ import { ConfluenceKnowledgeSource } from "../knowledge/confluence-knowledge.sou
 import { GoogleDriveKnowledgeSource } from "../knowledge/google-drive-knowledge.source";
 import { GoogleSheetsKnowledgeSource } from "../knowledge/google-sheets-knowledge.source";
 import { KnowledgeDocument, KnowledgeSource } from "../knowledge/knowledge-source.model";
+import { slugify } from "../../utils/slug.util";
+import { quoteSheetTitle } from "../../utils/google-sheets-a1.util";
 
 const logger = getLogger("OnboardService");
-
-// --- Config Schemas ---
-// --- Config Schemas ---
-// Centralized in config-service.ts. Re-exported here for backward compatibility.
-import {
-    OnboardPageSchema,
-    OnboardTicketSchema,
-    OnboardDocSchema,
-    OnboardConfluenceProjectConfig,
-    OnboardJiraProjectConfig,
-    OnboardGoogleSheetsConfig,
-    OnboardSheetLinksConfig,
-    OnboardProjectConfig,
-    OnboardConfigSchema,
-    OnboardConfig,
-} from "../config-service";
-
-export {
-    OnboardPageSchema,
-    OnboardTicketSchema,
-    OnboardDocSchema,
-    OnboardConfluenceProjectConfig,
-    OnboardJiraProjectConfig,
-    OnboardGoogleSheetsConfig,
-    OnboardSheetLinksConfig,
-    OnboardProjectConfig,
-    OnboardConfigSchema,
-    OnboardConfig,
-};
 
 export interface ConfluenceTask {
     pageEntry: z.infer<typeof OnboardPageSchema>;
@@ -85,6 +66,28 @@ export interface SyncedDocument {
     metadataAttributes: Record<string, string | number | boolean>;
 }
 
+/**
+ * Per-call state for a single sync() run, threaded explicitly through every helper instead of
+ * living on the OnboardService instance — the service is a typedi singleton, so instance state
+ * would make it non-reentrant (unsafe for concurrent or nested sync() calls) and hid the data flow
+ * behind implicit "this.foo" reads/writes.
+ */
+interface SyncContext {
+    /** When set, overrides every task's project name for the duration of this sync() call. */
+    projectNameOverride?: string;
+    /** Content files written during this sync() call, with their S3/Bedrock metadata attributes. */
+    syncedFiles: SyncedDocument[];
+    /**
+     * Output paths already claimed during this sync() call, shared across every executeTasks()
+     * invocation (Confluence, Jira, Google Docs each call it separately) so a custom outputPath
+     * colliding across source types is detected and renamed, not overwritten.
+     */
+    usedOutputPaths: Set<string>;
+    /** Per-document fetch outcome counts for this sync() call, so a fully failed run can be reported. */
+    fetchedCount: number;
+    failedCount: number;
+}
+
 @Service()
 export class OnboardService {
     constructor(
@@ -102,26 +105,9 @@ export class OnboardService {
         private readonly s3: S3Service,
     ) {}
 
-    /** When set, overrides every task's project name for the duration of a sync() call. */
-    private projectNameOverride?: string;
-    /** Content files written during the current sync() call, with their S3/Bedrock metadata attributes. */
-    private syncedFiles: SyncedDocument[] = [];
-    /**
-     * Output paths already claimed during the current sync() call, shared across every
-     * executeTasks() invocation (Confluence, Jira, Google Docs each call it separately) so a
-     * custom outputPath colliding across source types is detected and renamed, not overwritten.
-     */
-    private usedOutputPaths = new Set<string>();
-    /** Per-document fetch outcome counts for the current sync() call, so a fully failed run can be reported. */
-    private fetchedCount = 0;
-    private failedCount = 0;
-
     /** Normalizes a project name the same way sanitizeProjectName does, for case/punctuation-insensitive matching. */
     private normalizeProjectKey(name: string): string {
-        return name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/(^-|-$)/g, "");
+        return slugify(name);
     }
 
     /**
@@ -130,21 +116,17 @@ export class OnboardService {
      * with no project name (global, non-project-scoped config entries) are excluded, since they
      * don't belong to any single project. With no override, everything matches.
      */
-    private matchesProjectFilter(projectName?: string): boolean {
-        if (!this.projectNameOverride) return true;
+    private matchesProjectFilter(ctx: SyncContext, projectName?: string): boolean {
+        if (!ctx.projectNameOverride) return true;
         if (!projectName) return false;
-        return this.normalizeProjectKey(projectName) === this.normalizeProjectKey(this.projectNameOverride);
+        return this.normalizeProjectKey(projectName) === this.normalizeProjectKey(ctx.projectNameOverride);
     }
 
     /** Header names recognized in a structured project-config sheet (see onboarding-sheet-template.csv). */
     private static readonly PROJECT_SHEET_REQUIRED_COLUMN = "project_name";
 
     private normalizeColumnName(header: string): string {
-        return header
-            .trim()
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "_")
-            .replace(/(^_|_$)/g, "");
+        return slugify(header, "_");
     }
 
     private splitList(value: string | undefined): string[] {
@@ -171,6 +153,12 @@ export class OnboardService {
         for (const row of rows) {
             const projectName = col(row, "project_name");
             if (!projectName) continue;
+
+            if (config.projects![projectName]) {
+                logger.warn(
+                    `Duplicate "project_name" row for "${projectName}" in the structured sheet — the later row overwrites the earlier one.`,
+                );
+            }
 
             const confluenceBaseUrl = col(row, "confluence_base_url");
             const jiraBaseUrl = col(row, "jira_base_url");
@@ -228,13 +216,26 @@ export class OnboardService {
     public async resolveConfigFromSheet(spreadsheetId: string): Promise<OnboardConfig> {
         const meta = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
         const firstSheetTitle = meta.sheets?.[0]?.title ?? "Sheet1";
-        const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, [firstSheetTitle]);
+        const batchData = await this.googleDrive.batchGetSpreadsheetValues(spreadsheetId, [
+            quoteSheetTitle(firstSheetTitle),
+        ]);
         const rows = batchData.valueRanges?.[0]?.values ?? [];
         const [headerRow, ...dataRows] = rows;
         const header = (headerRow ?? []).map((h) => this.normalizeColumnName(String(h ?? "")));
 
         if (!header.includes(OnboardService.PROJECT_SHEET_REQUIRED_COLUMN)) {
-            logger.info(`Sheet ${spreadsheetId} has no "project_name" column — treating it as a sheet of links.`);
+            if (rows.length === 0) {
+                // No rows at all — could genuinely be an empty sheet, but could also be a
+                // transient/empty API response (a typo'd range, a tab still loading, etc.).
+                // Falling back to sheet-of-links mode is harmless here (it'll just find nothing to
+                // resolve), but call it out distinctly so a real structured sheet momentarily
+                // misread as empty isn't confused with one that's actually a sheet of links.
+                logger.warn(
+                    `Sheet ${spreadsheetId} returned no rows at all (tab "${firstSheetTitle}") — treating it as an empty sheet of links. If this was meant to be a structured project sheet, re-run once the sheet has loaded.`,
+                );
+            } else {
+                logger.info(`Sheet ${spreadsheetId} has no "project_name" column — treating it as a sheet of links.`);
+            }
             return { onboardingSheets: [{ spreadsheetId }] };
         }
 
@@ -249,15 +250,17 @@ export class OnboardService {
         cwd: string,
         projectNameOverride?: string,
     ): Promise<{ filesWritten: SyncedDocument[]; fetched: number; failed: number }> {
-        this.projectNameOverride = projectNameOverride;
-        this.syncedFiles = [];
-        this.usedOutputPaths = new Set<string>();
-        this.fetchedCount = 0;
-        this.failedCount = 0;
+        const ctx: SyncContext = {
+            projectNameOverride,
+            syncedFiles: [],
+            usedOutputPaths: new Set<string>(),
+            fetchedCount: 0,
+            failedCount: 0,
+        };
 
         const allProjectEntries = Object.entries(config.projects || {});
         const filteredProjectEntries = projectNameOverride
-            ? allProjectEntries.filter(([projectName]) => this.matchesProjectFilter(projectName))
+            ? allProjectEntries.filter(([projectName]) => this.matchesProjectFilter(ctx, projectName))
             : allProjectEntries;
 
         if (projectNameOverride && filteredProjectEntries.length === 0 && allProjectEntries.length > 0) {
@@ -287,11 +290,15 @@ export class OnboardService {
                   })
                 : { confluenceTasks: [], jiraTasks: [], googleTasks: [], sheetTasks: [] };
         sheetResolved.confluenceTasks = sheetResolved.confluenceTasks.filter((t) =>
-            this.matchesProjectFilter(t.projectName),
+            this.matchesProjectFilter(ctx, t.projectName),
         );
-        sheetResolved.jiraTasks = sheetResolved.jiraTasks.filter((t) => this.matchesProjectFilter(t.projectName));
-        sheetResolved.googleTasks = sheetResolved.googleTasks.filter((t) => this.matchesProjectFilter(t.projectName));
-        sheetResolved.sheetTasks = sheetResolved.sheetTasks.filter((t) => this.matchesProjectFilter(t.projectName));
+        sheetResolved.jiraTasks = sheetResolved.jiraTasks.filter((t) => this.matchesProjectFilter(ctx, t.projectName));
+        sheetResolved.googleTasks = sheetResolved.googleTasks.filter((t) =>
+            this.matchesProjectFilter(ctx, t.projectName),
+        );
+        sheetResolved.sheetTasks = sheetResolved.sheetTasks.filter((t) =>
+            this.matchesProjectFilter(ctx, t.projectName),
+        );
 
         // Collect Confluence tasks
         const globalConfluenceTasks = projectNameOverride
@@ -301,9 +308,11 @@ export class OnboardService {
                   baseUrl: config.confluence?.baseUrl,
               })) || [];
 
-        const spacesToResolve = (config.confluence?.spaces || []).filter((spaceKey) =>
-            this.matchesProjectFilter(spaceKey),
-        );
+        // Global (non-project) config entries are skipped entirely when filtering to a project —
+        // same as globalConfluenceTasks/globalJiraTasks/globalGoogleTasks below. A space key isn't
+        // itself a project name, so matching it against projectNameOverride would be a coincidence,
+        // not an intentional selection.
+        const spacesToResolve = projectNameOverride ? [] : config.confluence?.spaces || [];
         const globalSpacePages = await spacesToResolve.reduce(
             async (accPromise, spaceKey) => {
                 const acc = await accPromise;
@@ -449,7 +458,8 @@ export class OnboardService {
                         (t.pageEntry.startsWith("http://") || t.pageEntry.startsWith("https://"));
                     const urlParsed = isUrl ? parseConfluenceUrl(t.pageEntry as string) : null;
                     if (isUrl && !urlParsed) {
-                        throw new Error(`Could not extract a valid page ID from Confluence URL: ${t.pageEntry}`);
+                        logger.warn(`Skipping malformed Confluence URL (no page ID found): ${t.pageEntry}`);
+                        return null;
                     }
                     if (urlParsed && !this.isTrustedAtlassianOrigin(urlParsed.baseUrl, config.confluence?.baseUrl)) {
                         logger.warn(
@@ -470,6 +480,7 @@ export class OnboardService {
                 })
                 .filter((t): t is NonNullable<typeof t> => t !== null);
             await this.executeTasks(
+                ctx,
                 this.confluenceSource,
                 mappedTasks,
                 cwd,
@@ -488,7 +499,8 @@ export class OnboardService {
                         (t.ticketEntry.startsWith("http://") || t.ticketEntry.startsWith("https://"));
                     const urlParsed = isUrl ? parseJiraUrl(t.ticketEntry as string) : null;
                     if (isUrl && !urlParsed) {
-                        throw new Error(`Could not extract a valid ticket key from Jira URL: ${t.ticketEntry}`);
+                        logger.warn(`Skipping malformed Jira URL (no ticket key found): ${t.ticketEntry}`);
+                        return null;
                     }
                     if (urlParsed && !this.isTrustedAtlassianOrigin(urlParsed.baseUrl, config.jira?.baseUrl)) {
                         logger.warn(
@@ -509,6 +521,7 @@ export class OnboardService {
                 })
                 .filter((t): t is NonNullable<typeof t> => t !== null);
             await this.executeTasks(
+                ctx,
                 this.jiraSource,
                 mappedTasks,
                 cwd,
@@ -520,21 +533,25 @@ export class OnboardService {
         }
 
         if (googleTasks.length > 0) {
-            const mappedTasks = googleTasks.map((t) => {
-                const isUrl =
-                    typeof t.docEntry === "string" &&
-                    (t.docEntry.startsWith("http://") || t.docEntry.startsWith("https://"));
-                const urlParsed = isUrl ? parseGoogleDocUrl(t.docEntry as string) : null;
-                if (isUrl && !urlParsed) {
-                    throw new Error(`Could not extract a valid document ID from Google Doc URL: ${t.docEntry}`);
-                }
-                return {
-                    id: urlParsed ? urlParsed : typeof t.docEntry === "string" ? t.docEntry : t.docEntry.id,
-                    projectName: t.projectName,
-                    outputPath: typeof t.docEntry === "string" ? undefined : t.docEntry.outputPath,
-                };
-            });
+            const mappedTasks = googleTasks
+                .map((t) => {
+                    const isUrl =
+                        typeof t.docEntry === "string" &&
+                        (t.docEntry.startsWith("http://") || t.docEntry.startsWith("https://"));
+                    const urlParsed = isUrl ? parseGoogleDocUrl(t.docEntry as string) : null;
+                    if (isUrl && !urlParsed) {
+                        logger.warn(`Skipping malformed Google Doc URL (no document ID found): ${t.docEntry}`);
+                        return null;
+                    }
+                    return {
+                        id: urlParsed ? urlParsed : typeof t.docEntry === "string" ? t.docEntry : t.docEntry.id,
+                        projectName: t.projectName,
+                        outputPath: typeof t.docEntry === "string" ? undefined : t.docEntry.outputPath,
+                    };
+                })
+                .filter((t): t is NonNullable<typeof t> => t !== null);
             await this.executeTasks(
+                ctx,
                 this.googleDriveSource,
                 mappedTasks,
                 cwd,
@@ -547,20 +564,20 @@ export class OnboardService {
         // Google Sheets — read project index sheet if configured
         const globalSheetConfig = projectNameOverride ? undefined : config.googleSheets;
         if (globalSheetConfig) {
-            await this.executeGoogleSheetsTasks(globalSheetConfig, cwd);
+            await this.executeGoogleSheetsTasks(ctx, globalSheetConfig, cwd);
         }
 
         const projectSheets = filteredProjectEntries.filter(([_, projectConfig]) => projectConfig.googleSheets);
         for (const [projectName, projectConfig] of projectSheets) {
             if (projectConfig.googleSheets) {
-                await this.executeGoogleSheetsTasks(projectConfig.googleSheets, cwd, projectName);
+                await this.executeGoogleSheetsTasks(ctx, projectConfig.googleSheets, cwd, projectName);
             }
         }
 
         // Google Sheets dynamically resolved from cell links
         if (sheetResolved.sheetTasks && sheetResolved.sheetTasks.length > 0) {
             for (const t of sheetResolved.sheetTasks) {
-                await this.executeGoogleSheetsTasks({ spreadsheetId: t.spreadsheetId }, cwd, t.projectName);
+                await this.executeGoogleSheetsTasks(ctx, { spreadsheetId: t.spreadsheetId }, cwd, t.projectName);
             }
         }
 
@@ -571,7 +588,7 @@ export class OnboardService {
             logger.warn("No Confluence pages, Jira tickets, Google Documents, or Google Sheets configured to fetch.");
         }
 
-        return { filesWritten: [...this.syncedFiles], fetched: this.fetchedCount, failed: this.failedCount };
+        return { filesWritten: [...ctx.syncedFiles], fetched: ctx.fetchedCount, failed: ctx.failedCount };
     }
 
     // --- Generic task executor (replaces executeConfluenceTasks / executeJiraTasks / executeGoogleDocsTasks) ---
@@ -589,6 +606,7 @@ export class OnboardService {
      * @param defaultBaseUrl - Fallback base URL when task.baseUrl is not set
      */
     private async executeTasks(
+        ctx: SyncContext,
         source: KnowledgeSource,
         tasks: MappedTask[],
         cwd: string,
@@ -614,18 +632,18 @@ export class OnboardService {
 
                     // Determine output path
                     const safeTitle = this.getSafeTitle(doc.title, id);
-                    const sanitizedProj = this.sanitizeProjectName(projectName);
+                    const sanitizedProj = this.sanitizeProjectName(ctx, projectName);
                     const candidatePath = outputPath
                         ? resolve(cwd, outputPath)
                         : sanitizedProj
                           ? join(baseOnboardDir, sanitizedProj, subdir, `${safeTitle}.md`)
                           : join(baseOnboardDir, subdir, `${safeTitle}.md`);
 
-                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, this.usedOutputPaths);
-                    this.usedOutputPaths.add(absoluteOutputPath);
+                    const absoluteOutputPath = this.getUniqueOutputPath(candidatePath, ctx.usedOutputPaths);
+                    ctx.usedOutputPaths.add(absoluteOutputPath);
 
                     await this.writeDoc(doc, absoluteOutputPath);
-                    this.syncedFiles.push({
+                    ctx.syncedFiles.push({
                         contentPath: absoluteOutputPath,
                         metadataAttributes: this.buildMetadataAttributes({
                             title: doc.title,
@@ -643,18 +661,19 @@ export class OnboardService {
             ),
         );
 
-        this.logResults(results, label, unit);
+        this.logResults(ctx, results, label, unit);
     }
 
     // --- Google Sheets dedicated task executor (structured data, not a KnowledgeDocument flow) ---
 
     private async executeGoogleSheetsTasks(
+        ctx: SyncContext,
         sheetConfig: z.infer<typeof OnboardGoogleSheetsConfig>,
         cwd: string,
         projectName?: string,
     ): Promise<void> {
         const { spreadsheetId, range } = sheetConfig;
-        const effectiveProjectName = this.projectNameOverride ?? projectName;
+        const effectiveProjectName = ctx.projectNameOverride ?? projectName;
         if (effectiveProjectName) {
             logger.info(`Reading Google Sheet ${spreadsheetId} for project "${effectiveProjectName}"...`);
         } else {
@@ -677,13 +696,17 @@ export class OnboardService {
             }
 
             const safeTitle = this.getSafeTitle(spreadsheetTitle, spreadsheetId);
-            const sanitizedProj = this.sanitizeProjectName(projectName);
+            const sanitizedProj = this.sanitizeProjectName(ctx, projectName);
 
             const outputDir = sanitizedProj
                 ? join(baseOnboardDir, sanitizedProj, "google-sheets")
                 : join(baseOnboardDir, "google-sheets");
-            const mdPath = join(outputDir, `${safeTitle}.md`);
-            const jsonPath = join(outputDir, `${safeTitle}.json`);
+            // Two different sheets can share a title (or the same sheet can be referenced twice,
+            // once directly and once via a resolved link) — dedupe against every path already
+            // claimed this run, the same way executeTasks() does, instead of silently overwriting.
+            const mdPath = this.getUniqueOutputPath(join(outputDir, `${safeTitle}.md`), ctx.usedOutputPaths);
+            ctx.usedOutputPaths.add(mdPath);
+            const jsonPath = mdPath.replace(/\.md$/, ".json");
 
             const sidecar = {
                 spreadsheetId,
@@ -700,7 +723,7 @@ export class OnboardService {
             // document format and stays local-only, as a sidecar for inspection/tooling.
             await writeFile(mdPath, doc.content, "utf8");
             await writeFile(jsonPath, JSON.stringify(sidecar, null, 4), "utf8");
-            this.syncedFiles.push({
+            ctx.syncedFiles.push({
                 contentPath: mdPath,
                 metadataAttributes: this.buildMetadataAttributes({
                     title: spreadsheetTitle,
@@ -716,10 +739,10 @@ export class OnboardService {
             logger.info(
                 `✓ Saved Google Sheet "${spreadsheetTitle}" (${allRows.length - 1} data row(s)) to: ${mdPath} (and JSON sidecar)`,
             );
-            this.fetchedCount++;
+            ctx.fetchedCount++;
         } catch (err) {
             logger.error(`✗ Failed to read Google Sheet ${spreadsheetId}: ${(err as Error).message}`);
-            this.failedCount++;
+            ctx.failedCount++;
         }
     }
 
@@ -767,13 +790,13 @@ export class OnboardService {
     private static readonly ONBOARD_SUBDIRS = ["confluence", "jira", "google-docs", "google-sheets"] as const;
 
     /**
-     * Uploads the given synced documents to the configured S3 bucket, mirroring each content
-     * file's path relative to the local onboarding directory as its S3 key. For each document:
-     * ensures the destination "folder" prefix exists, skips upload if the content object already
-     * exists in S3, otherwise uploads the content plus a Bedrock Knowledge Base-compliant
-     * "<key>.metadata.json" sidecar (i.e. `{ "metadataAttributes": {...} }`, at the exact same
-     * key with ".metadata.json" appended) — the naming Bedrock requires to recognize it as
-     * metadata for the content object rather than as its own separate document to ingest.
+     * Uploads the given synced documents to the configured S3 bucket (up to 5 concurrently),
+     * mirroring each content file's path relative to the local onboarding directory as its S3
+     * key. Uploads the content plus a Bedrock Knowledge Base-compliant "<key>.metadata.json"
+     * sidecar (i.e. `{ "metadataAttributes": {...} }`, at the exact same key with
+     * ".metadata.json" appended) — the naming Bedrock requires to recognize it as metadata for
+     * the content object rather than as its own separate document to ingest. S3 has no real
+     * directory concept, so keys with slashes need no prior "folder" object to exist.
      */
     public async uploadToS3(files: SyncedDocument[]): Promise<{ uploaded: number; skipped: number; failed: number }> {
         if (files.length === 0) {
@@ -782,39 +805,47 @@ export class OnboardService {
         }
 
         const baseOnboardDir = this.resolveBaseOnboardDir();
-        const ensuredPrefixes = new Set<string>();
-        let uploaded = 0;
-        let skipped = 0;
-        let failed = 0;
+        const skipped = 0;
+        const limit = pLimit(5);
 
-        for (const file of files) {
-            const key = relative(baseOnboardDir, file.contentPath).split(sep).join("/");
-            const metadataKey = `${key}.metadata.json`;
-            try {
-                const folderPrefix = dirname(key);
-                if (folderPrefix && folderPrefix !== "." && !ensuredPrefixes.has(folderPrefix)) {
-                    await this.s3.ensurePrefixExists(folderPrefix);
-                    ensuredPrefixes.add(folderPrefix);
-                }
+        const results = await Promise.allSettled(
+            files.map((file) =>
+                limit(async () => {
+                    const relativePath = relative(baseOnboardDir, file.contentPath);
+                    // A custom outputPath can resolve outside the onboarding directory entirely
+                    // (e.g. an absolute path, or one with enough "../" to escape it), which would
+                    // otherwise produce an S3 key littered with "../" segments. Fall back to a
+                    // flat "external/<basename>" key.
+                    const key =
+                        relativePath.startsWith("..") || relativePath.startsWith(sep)
+                            ? `external/${basename(file.contentPath)}`
+                            : relativePath.split(sep).join("/");
+                    const metadataKey = `${key}.metadata.json`;
 
-                // PutObject is idempotent and Bedrock ingestion diffs by ETag, so always upload —
-                // skipping when the key already exists would freeze the Knowledge Base at whatever
-                // content was first synced, since an edited page would never be re-uploaded.
-                const body = await readFile(file.contentPath);
-                const contentType = key.endsWith(".json") ? "application/json" : "text/markdown";
-                await this.s3.putObject(key, body, contentType);
-                await this.s3.putObject(
-                    metadataKey,
-                    JSON.stringify({ metadataAttributes: file.metadataAttributes }, null, 2),
-                    "application/json",
-                );
-                logger.info(`  s3: uploaded ${key} (+ ${metadataKey})`);
-                uploaded++;
-            } catch (err) {
-                logger.error(`  s3: failed to upload ${key}: ${(err as Error).message}`);
-                failed++;
+                    // PutObject is idempotent and Bedrock ingestion diffs by ETag, so always
+                    // upload — skipping when the key already exists would freeze the Knowledge
+                    // Base at whatever content was first synced, since an edited page would never
+                    // be re-uploaded.
+                    const body = await readFile(file.contentPath);
+                    const contentType = key.endsWith(".json") ? "application/json" : "text/markdown";
+                    await this.s3.putObject(key, body, contentType);
+                    await this.s3.putObject(
+                        metadataKey,
+                        JSON.stringify({ metadataAttributes: file.metadataAttributes }, null, 2),
+                        "application/json",
+                    );
+                    logger.info(`  s3: uploaded ${key} (+ ${metadataKey})`);
+                }),
+            ),
+        );
+
+        results.forEach((res, i) => {
+            if (res.status === "rejected") {
+                logger.error(`  s3: failed to upload ${files[i].contentPath}: ${res.reason.message}`);
             }
-        }
+        });
+        const uploaded = results.filter((r) => r.status === "fulfilled").length;
+        const failed = results.filter((r) => r.status === "rejected").length;
 
         logger.info(`\nS3 upload completed: ${uploaded} uploaded, ${skipped} already present, ${failed} failed.`);
         return { uploaded, skipped, failed };
@@ -902,12 +933,14 @@ export class OnboardService {
     private async describeDoc(filePath: string, subdir: string): Promise<string | undefined> {
         try {
             if (subdir === "google-sheets") {
-                const raw = JSON.parse(await readFile(filePath, "utf8"));
-                return `${raw.title ?? basename(filePath)} (${raw.rowCount ?? "?"} rows)`;
+                const raw = JSON.parse(await readFile(filePath, "utf8")) as { title?: unknown; rowCount?: unknown };
+                const title = typeof raw.title === "string" ? raw.title : basename(filePath);
+                const rowCount = typeof raw.rowCount === "number" ? raw.rowCount : "?";
+                return `${title} (${rowCount} rows)`;
             }
             const jsonPath = filePath.replace(/\.md$/, ".json");
-            const raw = JSON.parse(await readFile(jsonPath, "utf8"));
-            return raw.title ?? basename(filePath);
+            const raw = JSON.parse(await readFile(jsonPath, "utf8")) as { title?: unknown };
+            return typeof raw.title === "string" ? raw.title : basename(filePath);
         } catch {
             return basename(filePath);
         }
@@ -915,7 +948,7 @@ export class OnboardService {
 
     // --- Logging helper ---
 
-    private logResults(results: PromiseSettledResult<void>[], label: string, unit: string): void {
+    private logResults(ctx: SyncContext, results: PromiseSettledResult<void>[], label: string, unit: string): void {
         results.forEach((res) => {
             if (res.status === "rejected") {
                 logger.error(`✗ ${label} sync task failed: ${res.reason.message}`);
@@ -923,20 +956,15 @@ export class OnboardService {
         });
         const fetchedCount = results.filter((r) => r.status === "fulfilled").length;
         const failedCount = results.filter((r) => r.status === "rejected").length;
-        this.fetchedCount += fetchedCount;
-        this.failedCount += failedCount;
+        ctx.fetchedCount += fetchedCount;
+        ctx.failedCount += failedCount;
         logger.info(`\n${label} sync completed: ${fetchedCount} ${unit} fetched, ${failedCount} failed.`);
     }
 
     // --- Private utilities ---
 
     private getSafeTitle(title: string, fallbackId: string): string {
-        return (
-            title
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "-")
-                .replace(/(^-|-$)/g, "") || fallbackId
-        );
+        return slugify(title) || fallbackId;
     }
 
     private resolveBaseOnboardDir(): string {
@@ -944,15 +972,10 @@ export class OnboardService {
         return join(dirname(personalPath), "onboarding");
     }
 
-    private sanitizeProjectName(projectName?: string): string | undefined {
-        const effective = this.projectNameOverride ?? projectName;
+    private sanitizeProjectName(ctx: SyncContext, projectName?: string): string | undefined {
+        const effective = ctx.projectNameOverride ?? projectName;
         if (!effective) return undefined;
-        return (
-            effective
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "-")
-                .replace(/(^-|-$)/g, "") || "default"
-        );
+        return slugify(effective) || "default";
     }
 
     /**
@@ -983,20 +1006,25 @@ export class OnboardService {
         }
     }
 
+    /**
+     * Appends a "-2", "-3", ... suffix to basePath until it's not in usedPaths. Always suffixes
+     * fresh off the original base name rather than stripping a "-<number>" pattern from a
+     * previous candidate — a naive strip would also match (and corrupt) a title that itself ends
+     * in digits, e.g. "release-2026.md" becoming "release-2.md" instead of "release-2026-2.md".
+     */
     private getUniqueOutputPath(basePath: string, usedPaths: Set<string>): string {
-        const getUnique = (pathStr: string, suffix: number): string => {
-            if (!usedPaths.has(pathStr)) return pathStr;
-            const nextPath = pathStr.endsWith(".md")
-                ? pathStr.replace(/(-\d+)?\.md$/, `-${suffix}.md`)
-                : (() => {
-                      const ext = extname(pathStr);
-                      const baseName = pathStr.slice(0, pathStr.length - ext.length);
-                      const cleanBaseName = baseName.replace(/(-\d+)?$/, `-${suffix}`);
-                      return cleanBaseName + ext;
-                  })();
-            return getUnique(nextPath, suffix + 1);
-        };
-        return getUnique(basePath, 2);
+        if (!usedPaths.has(basePath)) return basePath;
+
+        const ext = extname(basePath);
+        const baseWithoutExt = basePath.slice(0, basePath.length - ext.length);
+
+        let suffix = 2;
+        let candidate = `${baseWithoutExt}-${suffix}${ext}`;
+        while (usedPaths.has(candidate)) {
+            suffix += 1;
+            candidate = `${baseWithoutExt}-${suffix}${ext}`;
+        }
+        return candidate;
     }
 
     private async resolveTasksFromSheets(
@@ -1014,10 +1042,15 @@ export class OnboardService {
                 try {
                     const spreadsheet = await this.googleDrive.getSpreadsheetMetadata(spreadsheetId);
 
-                    // Determine which tabs to read
+                    // Determine which tabs to read. A1 notation requires a sheet name to be
+                    // single-quoted whenever it contains anything but letters/digits/underscore
+                    // (e.g. a space) — passing a raw title like "My Tab" as the range is invalid.
                     const rangesToFetch = range
                         ? [range]
-                        : (spreadsheet.sheets || []).map((s) => s.title).filter((t): t is string => !!t);
+                        : (spreadsheet.sheets || [])
+                              .map((s) => s.title)
+                              .filter((t): t is string => !!t)
+                              .map((title) => quoteSheetTitle(title));
 
                     if (rangesToFetch.length === 0) {
                         rangesToFetch.push("Sheet1");

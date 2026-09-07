@@ -1,25 +1,19 @@
 import { input } from "@inquirer/prompts";
 import { getLogger } from "log4js";
 import { Marked } from "marked";
+import { markedTerminal } from "marked-terminal";
 import { Service } from "typedi";
 import { z } from "zod";
-import { BedrockKnowledgeBaseService } from "../integrations/aws/services/bedrock-knowledge-base.service";
-import { getKnowledgeBaseChatMessages } from "../prompts/knowledge-base-chat.prompt";
-import { ConfigService, OnboardConfig } from "../services/config-service";
-import { LlmService } from "../services/llm-service";
+import { KnowledgeBaseChatService } from "../services/knowledge/knowledge-base-chat.service";
+import { ConfigService } from "../services/config-service";
+import { OnboardConfig } from "../services/onboarding/onboarding-config.schema";
 import { OnboardingConfigService } from "../services/onboarding/onboarding-config.service";
 import { OnboardService } from "../services/onboarding/onboard.service";
+import { slugify } from "../utils/slug.util";
 import { WorkingDirectory } from "../utils/working-directory";
 import { TypedCommand, TypedInputs } from "./base";
 
 const logger = getLogger("OnboardCommand");
-const { markedTerminal } = require("marked-terminal");
-const terminalMarkdown = new Marked(
-    markedTerminal({
-        width: process.stdout.columns || 100,
-        reflowText: false,
-    }),
-);
 
 const INPUTS = [
     {
@@ -67,7 +61,7 @@ const INPUTS = [
     {
         name: "format",
         description:
-            "Write a sample .sateng/onboarding.json config (with example Confluence, Jira, and Google Drive entries) to the current directory, instead of syncing",
+            "Write a sample .sateng/onboarding.json config (with example Confluence, Jira, and Google Drive entries) to the repository root, instead of syncing",
         schema: z.boolean().optional(),
     },
     {
@@ -97,12 +91,24 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         private readonly onboardService: OnboardService,
         private readonly configService: ConfigService,
         private readonly onboardingConfig: OnboardingConfigService,
-        private readonly knowledgeBase: BedrockKnowledgeBaseService,
-        private readonly llmService: LlmService,
+        private readonly chatService: KnowledgeBaseChatService,
         private readonly dir: WorkingDirectory,
     ) {}
 
+    private static readonly EXCLUSIVE_MODE_FLAGS = [
+        "format",
+        "chat",
+        "knowledge-base",
+        "list",
+        "forget-sheet",
+    ] as const;
+
     public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
+        const activeModes = OnboardCommand.EXCLUSIVE_MODE_FLAGS.filter((flag) => inputs[flag]);
+        if (activeModes.length > 1) {
+            throw new Error(`--${activeModes.join(", --")} are mutually exclusive — pass only one of them at a time.`);
+        }
+
         if (inputs.format) {
             this.onboardingConfig.writeSampleConfig();
             return;
@@ -218,19 +224,21 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
     private normalizeProjectName(projectName?: string): string | undefined {
         if (!projectName?.trim()) return undefined;
-        return (
-            projectName
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, "-")
-                .replace(/(^-|-$)/g, "") || undefined
-        );
+        return slugify(projectName) || undefined;
     }
 
     /**
      * Prompts for one question. Returns the trimmed question, or null to signal the REPL
-     * should exit — on blank input, "exit"/"quit"/":q", or Ctrl+C (inquirer's ExitPromptError).
+     * should exit — on blank input, "exit"/"quit"/":q", Ctrl+C (inquirer's ExitPromptError), or
+     * a non-interactive stdin (a pipe/redirect can't be typed into and, with `terminal: true`
+     * forced by inquirer, may hang instead of ever closing).
      */
     private async promptQuestion(): Promise<string | null> {
+        if (!process.stdin.isTTY) {
+            logger.error("stdin is not a TTY — this interactive mode requires a terminal.");
+            return null;
+        }
+
         let question: string;
         try {
             question = await input({
@@ -292,9 +300,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
             try {
                 const results = await this.withLoading("Retrieving matching knowledge base chunks", () =>
-                    project
-                        ? this.knowledgeBase.retrieve(question, { project })
-                        : this.knowledgeBase.retrieve(question),
+                    this.chatService.search(question, { project }),
                 );
                 if (results.length === 0) {
                     logger.info("No matching results found.\n");
@@ -322,16 +328,46 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         return answer.replace(/\s*\[(?:\d+(?:\s*,\s*\d+)*)\]/g, "");
     }
 
+    /**
+     * Built lazily on first use (and re-built if the terminal is resized) instead of at module
+     * load — most commands never render an answer, and process.stdout.columns at import time
+     * doesn't reflect the terminal's actual current width (e.g. after a resize).
+     */
+    private terminalMarkdown?: { renderer: Marked; width: number };
+
+    private getTerminalMarkdown(): Marked {
+        const width = process.stdout.columns || 100;
+        if (!this.terminalMarkdown || this.terminalMarkdown.width !== width) {
+            this.terminalMarkdown = {
+                renderer: new Marked(markedTerminal({ width, reflowText: false })),
+                width,
+            };
+        }
+        return this.terminalMarkdown.renderer;
+    }
+
     private renderAnswer(answer: string): string {
         const cleaned = this.stripInlineCitations(answer).trim();
         if (!process.stdout.isTTY) {
             return cleaned;
         }
-        return String(terminalMarkdown.parse(cleaned)).trimEnd();
+        return String(this.getTerminalMarkdown().parse(cleaned)).trimEnd();
     }
 
-    private printSources(chunks: Array<{ location?: string }>): void {
-        const sources = Array.from(new Set(chunks.map((chunk) => chunk.location).filter(Boolean)));
+    private printSources(chunks: Array<{ location?: string; metadata?: Record<string, unknown> }>): void {
+        // Prefer the original document URL (Confluence/Jira/Drive) carried in the metadata
+        // sidecar we uploaded alongside the content — `location` is the S3 URI Bedrock ingested
+        // from, which isn't something a person can usefully open.
+        const sources = Array.from(
+            new Set(
+                chunks
+                    .map((chunk) => {
+                        const metadataUrl = chunk.metadata?.url;
+                        return (typeof metadataUrl === "string" && metadataUrl) || chunk.location;
+                    })
+                    .filter(Boolean),
+            ),
+        );
         if (sources.length === 0) return;
 
         logger.info("Sources:");
@@ -369,16 +405,8 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             }
 
             try {
-                const { chunks, answer } = await this.withLoading(
-                    "Retrieving context and generating answer",
-                    async () => {
-                        const chunks = project
-                            ? await this.knowledgeBase.retrieve(question, { project })
-                            : await this.knowledgeBase.retrieve(question);
-                        const { system, user } = getKnowledgeBaseChatMessages({ question, chunks, project });
-                        const answer = await this.llmService.prompt([system, user]);
-                        return { chunks, answer };
-                    },
+                const { chunks, answer } = await this.withLoading("Retrieving context and generating answer", () =>
+                    this.chatService.ask(question, { project }),
                 );
 
                 logger.info(`\n${this.renderAnswer(answer)}\n`);

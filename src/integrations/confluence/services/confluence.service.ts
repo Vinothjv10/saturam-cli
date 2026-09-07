@@ -18,6 +18,8 @@ const logger = getLogger("ConfluenceService");
 export class ConfluenceService {
     constructor(private readonly config: ConfigService) {}
 
+    private warnedAboutBearerAuth = false;
+
     // --- Private helpers ---
 
     /**
@@ -38,6 +40,15 @@ export class ConfluenceService {
                 Authorization: `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString("base64")}`,
             };
         }
+        // Bearer auth without an email is only valid for Server/Data Center Personal Access
+        // Tokens — Confluence Cloud requires Basic auth with an email, so this will 401 there.
+        if (!this.warnedAboutBearerAuth) {
+            this.warnedAboutBearerAuth = true;
+            logger.warn(
+                "No Atlassian email configured — using Bearer auth, which only works for Confluence Server/Data Center Personal Access Tokens. " +
+                    "Confluence Cloud requires ATLASSIAN_EMAIL (or CONFLUENCE_EMAIL) alongside the token.",
+            );
+        }
         return {
             Accept: "application/json",
             Authorization: `Bearer ${credentials.token}`,
@@ -54,7 +65,7 @@ export class ConfluenceService {
     public async getPage(baseUrl: string, pageId: string): Promise<ConfluencePageApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
         const expand = "body.storage,version,space,ancestors,history.lastUpdated,history.createdBy,metadata.labels";
-        const url = `${apiBase}/content/${pageId}?expand=${encodeURIComponent(expand)}`;
+        const url = `${apiBase}/content/${encodeURIComponent(pageId)}?expand=${encodeURIComponent(expand)}`;
 
         logger.debug(`Fetching Confluence page ${pageId} from: ${url}`);
 
@@ -74,7 +85,7 @@ export class ConfluenceService {
     public async getPageMetadata(baseUrl: string, pageId: string): Promise<ConfluencePageApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
         const expand = "version,space,ancestors,history.lastUpdated,history.createdBy,metadata.labels";
-        const url = `${apiBase}/content/${pageId}?expand=${encodeURIComponent(expand)}`;
+        const url = `${apiBase}/content/${encodeURIComponent(pageId)}?expand=${encodeURIComponent(expand)}`;
 
         logger.debug(`Fetching Confluence page metadata ${pageId} from: ${url}`);
 
@@ -99,7 +110,7 @@ export class ConfluenceService {
         const apiBase = this.getApiBase(baseUrl);
         const limit = options?.limit ?? 50;
         const start = options?.start ?? 0;
-        const url = `${apiBase}/content/${pageId}/child/page?limit=${limit}&start=${start}`;
+        const url = `${apiBase}/content/${encodeURIComponent(pageId)}/child/page?limit=${limit}&start=${start}`;
 
         logger.debug(`Fetching child pages for Confluence page ${pageId} from: ${url}`);
 

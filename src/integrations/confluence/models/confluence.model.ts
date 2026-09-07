@@ -72,6 +72,8 @@ export interface ConfluencePageApiResponse {
     _links?: {
         webui?: string;
         self?: string;
+        /** The site's absolute base URL (e.g. "https://example.atlassian.net/wiki") — combine with `webui` for a real page URL. */
+        base?: string;
     };
 }
 

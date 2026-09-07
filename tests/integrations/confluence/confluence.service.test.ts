@@ -79,6 +79,16 @@ describe("ConfluenceService", () => {
             expect(calledUrl).toContain("body.storage");
         });
 
+        it("URL-encodes the page ID, so a page ID containing special characters can't break the request path", async () => {
+            mockConfigService.getConfluenceCredentials.mockResolvedValue(basicCredentials);
+            mockFetchOk({ id: "weird" });
+
+            await service.getPage("https://my-company.atlassian.net", "123?evil=1&foo=/bar");
+
+            const calledUrl = (global.fetch as jest.Mock).mock.calls[0][0] as string;
+            expect(calledUrl).toContain("/content/123%3Fevil%3D1%26foo%3D%2Fbar");
+        });
+
         it("returns raw response using Bearer auth when no email is provided", async () => {
             mockConfigService.getConfluenceCredentials.mockResolvedValue(bearerCredentials);
             mockFetchOk({ id: "9999", title: "Bearer Page" });

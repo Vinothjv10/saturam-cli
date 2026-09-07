@@ -74,19 +74,6 @@ export class S3Service {
     }
 
     /**
-     * Ensures a "folder" prefix exists in the bucket (S3 has no real folders — this creates the
-     * zero-byte marker object, e.g. "google-docs/saturam/", that the console/CLI treat as one).
-     * No-op if an object already exists under that prefix.
-     */
-    public async ensurePrefixExists(folderPrefix: string): Promise<void> {
-        const normalized = folderPrefix.endsWith("/") ? folderPrefix : `${folderPrefix}/`;
-        const existingKeys = await this.listObjects(normalized);
-        if (existingKeys.length > 0) return;
-
-        await this.putObject(normalized, "");
-    }
-
-    /**
      * Uploads an object to the configured S3 bucket (key is relative to the configured prefix, if any).
      */
     public async putObject(key: string, body: Buffer | string, contentType?: string): Promise<void> {

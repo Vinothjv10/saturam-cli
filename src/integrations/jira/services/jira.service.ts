@@ -5,6 +5,7 @@ import { JIRA_API_PATH } from "../constants/jira.constant";
 import { fetchWithTimeout } from "../../../utils/fetch-with-timeout";
 import {
     JiraBoardsApiResponse,
+    JiraComment,
     JiraIssueApiResponse,
     JiraProjectsApiResponse,
     JiraSearchApiResponse,
@@ -16,6 +17,8 @@ const logger = getLogger("JiraService");
 @Service()
 export class JiraService {
     constructor(private readonly config: ConfigService) {}
+
+    private warnedAboutBearerAuth = false;
 
     // --- Private helpers ---
 
@@ -30,6 +33,15 @@ export class JiraService {
                 Accept: "application/json",
                 Authorization: `Basic ${Buffer.from(`${credentials.email}:${credentials.token}`).toString("base64")}`,
             };
+        }
+        // Bearer auth without an email is only valid for Server/Data Center Personal Access
+        // Tokens — Jira Cloud requires Basic auth with an email, so this will 401 there.
+        if (!this.warnedAboutBearerAuth) {
+            this.warnedAboutBearerAuth = true;
+            logger.warn(
+                "No Atlassian email configured — using Bearer auth, which only works for Jira Server/Data Center Personal Access Tokens. " +
+                    "Jira Cloud requires ATLASSIAN_EMAIL (or JIRA_EMAIL) alongside the token.",
+            );
         }
         return {
             Accept: "application/json",
@@ -46,7 +58,12 @@ export class JiraService {
      */
     public async getIssue(baseUrl: string, issueKey: string): Promise<JiraIssueApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
-        const url = `${apiBase}/issue/${issueKey}`;
+        // Narrowed to what JiraKnowledgeSource actually renders — the full issue payload also
+        // carries attachments, worklogs, and every custom field, which is unnecessary weight here.
+        // Comments are still capped to Jira's default page here; use listAllComments() for the
+        // complete, paginated list on issues that may have more than that.
+        const fields = "summary,status,assignee,reporter,priority,issuetype,created,updated,description,comment,labels";
+        const url = `${apiBase}/issue/${encodeURIComponent(issueKey)}?fields=${encodeURIComponent(fields)}`;
 
         logger.debug(`Fetching Jira issue ${issueKey} from: ${url}`);
 
@@ -62,12 +79,56 @@ export class JiraService {
     }
 
     /**
+     * Fetches ALL comments on an issue by auto-paginating the dedicated /issue/{key}/comment
+     * endpoint — the comments embedded in getIssue()'s response are capped at Jira's default
+     * page size, so an issue with many comments would otherwise silently show only the first page.
+     */
+    public async listAllComments(baseUrl: string, issueKey: string): Promise<JiraComment[]> {
+        const apiBase = this.getApiBase(baseUrl);
+        const maxResults = 100;
+        const MAX_ITERATIONS = 1000;
+
+        const fetchPage = async (
+            startAt: number,
+            iterations: number,
+            accumulated: JiraComment[],
+        ): Promise<JiraComment[]> => {
+            if (iterations >= MAX_ITERATIONS) {
+                logger.error(
+                    `listAllComments: exceeded MAX_ITERATIONS (${MAX_ITERATIONS}) for issue "${issueKey}". Partial results returned.`,
+                );
+                return accumulated;
+            }
+
+            const url = `${apiBase}/issue/${encodeURIComponent(issueKey)}/comment?startAt=${startAt}&maxResults=${maxResults}`;
+            const response = await fetchWithTimeout(url, { headers: await this.getHeaders() });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(
+                    `Failed to fetch comments for Jira issue ${issueKey}: ${response.status} ${response.statusText} - ${text}`,
+                );
+            }
+
+            const page = (await response.json()) as { comments?: JiraComment[]; total?: number };
+            const comments = page.comments ?? [];
+            const nextAccumulated = [...accumulated, ...comments];
+            if (comments.length === 0 || nextAccumulated.length >= (page.total ?? nextAccumulated.length)) {
+                return nextAccumulated;
+            }
+
+            return fetchPage(startAt + comments.length, iterations + 1, nextAccumulated);
+        };
+
+        return fetchPage(0, 0, []);
+    }
+
+    /**
      * Fetch metadata for a single Jira issue (no description, no comments).
      */
     public async getIssueMetadata(baseUrl: string, issueKey: string): Promise<JiraIssueApiResponse> {
         const apiBase = this.getApiBase(baseUrl);
         const fields = "summary,status,assignee,reporter,priority,issuetype,created,updated,labels,project";
-        const url = `${apiBase}/issue/${issueKey}?fields=${encodeURIComponent(fields)}`;
+        const url = `${apiBase}/issue/${encodeURIComponent(issueKey)}?fields=${encodeURIComponent(fields)}`;
 
         logger.debug(`Fetching metadata for Jira issue ${issueKey} from: ${url}`);
 

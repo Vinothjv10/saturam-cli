@@ -15,7 +15,9 @@
 export function parseGoogleDocUrl(urlStr: string): string | null {
     try {
         const url = new URL(urlStr);
-        if (!url.hostname.includes("docs.google.com")) return null;
+        // Exact match, not a substring check — "includes" would also accept a spoofed host like
+        // "docs.google.com.evil.com" or "notdocs.google.com".
+        if (url.hostname !== "docs.google.com") return null;
         const match = url.pathname.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
         return match ? match[1] : null;
     } catch {
@@ -35,7 +37,9 @@ export function parseGoogleDocUrl(urlStr: string): string | null {
 export function parseGoogleSheetUrl(urlStr: string): string | null {
     try {
         const url = new URL(urlStr);
-        if (!url.hostname.includes("docs.google.com")) return null;
+        // Exact match, not a substring check — "includes" would also accept a spoofed host like
+        // "docs.google.com.evil.com" or "notdocs.google.com".
+        if (url.hostname !== "docs.google.com") return null;
         const match = url.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
         return match ? match[1] : null;
     } catch {

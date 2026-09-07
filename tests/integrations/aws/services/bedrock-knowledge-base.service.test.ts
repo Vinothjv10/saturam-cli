@@ -85,4 +85,33 @@ describe("BedrockKnowledgeBaseService", () => {
             }),
         );
     });
+
+    it("rebuilds the client when the knowledge base's region changes between calls", async () => {
+        mockSend.mockResolvedValue({ retrievalResults: [] });
+
+        (mockConfig.getBedrockKnowledgeBaseConfig as jest.Mock).mockResolvedValueOnce({
+            knowledgeBaseId: "KB123",
+            region: "ap-south-1",
+        });
+        await service.retrieve("first question");
+        expect(mockBedrockClient).toHaveBeenCalledTimes(1);
+        expect(mockBedrockClient).toHaveBeenLastCalledWith(expect.objectContaining({ region: "ap-south-1" }));
+
+        // Same region again — client is reused, not rebuilt.
+        (mockConfig.getBedrockKnowledgeBaseConfig as jest.Mock).mockResolvedValueOnce({
+            knowledgeBaseId: "KB123",
+            region: "ap-south-1",
+        });
+        await service.retrieve("second question");
+        expect(mockBedrockClient).toHaveBeenCalledTimes(1);
+
+        // Different region — the cached client must not be silently reused.
+        (mockConfig.getBedrockKnowledgeBaseConfig as jest.Mock).mockResolvedValueOnce({
+            knowledgeBaseId: "KB456",
+            region: "us-west-2",
+        });
+        await service.retrieve("third question");
+        expect(mockBedrockClient).toHaveBeenCalledTimes(2);
+        expect(mockBedrockClient).toHaveBeenLastCalledWith(expect.objectContaining({ region: "us-west-2" }));
+    });
 });

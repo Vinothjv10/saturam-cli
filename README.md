@@ -100,10 +100,11 @@ sat-cli onboard
 sat-cli onboard <spreadsheet-url-or-id>
 
 # Write a sample .sateng/onboarding.json (Confluence/Jira/Google Drive examples) to the
-# current directory, instead of syncing — never overwrites an existing onboarding.json
+# repository root, instead of syncing — never overwrites an existing onboarding.json
 sat-cli onboard --format
 
-# Override the output project folder name for every document fetched in this run
+# Restrict the sync to just the matching projects.<project-name> section of your onboarding
+# config (global, non-project entries are skipped), and use it as the output folder name
 # (e.g. onboarding/<project-name>/confluence/... instead of each config/tab-derived name)
 sat-cli onboard --project-name "Saturam Core"
 sat-cli onboard <spreadsheet-url-or-id> --project-name "Saturam Core"
@@ -473,8 +474,8 @@ All settings can also be provided via environment variables, which take priority
 | `GOOGLE_API_KEY`           | Google (Gemini)                            |
 | `XAI_API_KEY`              | xAI (Grok)                                 |
 | `DEEPSEEK_API_KEY`         | DeepSeek                                   |
-| `AWS_PROFILE`              | AWS Bedrock                                |
-| `AWS_REGION`               | AWS Bedrock region                         |
+| `AWS_PROFILE`              | AWS Bedrock (also used for S3/Cloud — see below) |
+| `AWS_REGION`               | AWS region — Bedrock, S3, and Bedrock Knowledge Base all fall back to this |
 | `OLLAMA_BASE_URL`          | Ollama (default: `http://localhost:11434`) |
 | `OLLAMA_API_TOKEN`         | Optional bearer token for remote Ollama    |
 | `SELF_HOSTED_ENDPOINT`     | Self Hosted LLM endpoint                   |

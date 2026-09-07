@@ -35,7 +35,7 @@ export class GoogleDriveService {
     public async getFileMetadata(fileId: string): Promise<GoogleDriveFileMetadata> {
         const fields =
             "id,name,mimeType,modifiedTime,createdTime,owners,size,webViewLink,webContentLink,parents,trashed";
-        const url = `${GOOGLE_DRIVE_API}/files/${fileId}?fields=${encodeURIComponent(fields)}&supportsAllDrives=true`;
+        const url = `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=${encodeURIComponent(fields)}&supportsAllDrives=true`;
 
         logger.debug(`Fetching file metadata for ${fileId}: ${url}`);
 
@@ -56,7 +56,7 @@ export class GoogleDriveService {
      * Returns the Docs API v1 response — paragraphs, tables, inline objects.
      */
     public async getGoogleDoc(documentId: string): Promise<GoogleDocApiResponse> {
-        const url = `${GOOGLE_DOCS_API}/${documentId}`;
+        const url = `${GOOGLE_DOCS_API}/${encodeURIComponent(documentId)}`;
 
         logger.debug(`Fetching Google Doc structured JSON for ${documentId}: ${url}`);
 
@@ -75,7 +75,7 @@ export class GoogleDriveService {
      * Only works for mimeType = "application/vnd.google-apps.document".
      */
     public async exportGoogleDocAsMarkdown(documentId: string): Promise<string> {
-        const url = `${GOOGLE_DRIVE_API}/files/${documentId}/export?mimeType=${encodeURIComponent("text/markdown")}&supportsAllDrives=true`;
+        const url = `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(documentId)}/export?mimeType=${encodeURIComponent("text/markdown")}&supportsAllDrives=true`;
 
         logger.debug(`Exporting file ${documentId} as Markdown: ${url}`);
 
@@ -94,7 +94,7 @@ export class GoogleDriveService {
      * Only works for mimeType = "application/vnd.google-apps.document".
      */
     public async exportGoogleDocAsHtml(documentId: string): Promise<string> {
-        const url = `${GOOGLE_DRIVE_API}/files/${documentId}/export?mimeType=${encodeURIComponent("text/html")}&supportsAllDrives=true`;
+        const url = `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(documentId)}/export?mimeType=${encodeURIComponent("text/html")}&supportsAllDrives=true`;
 
         logger.debug(`Exporting file ${documentId} as HTML: ${url}`);
 
@@ -113,7 +113,7 @@ export class GoogleDriveService {
      * Returns the raw file bytes as an ArrayBuffer.
      */
     public async getFileBinary(fileId: string): Promise<ArrayBuffer> {
-        const url = `${GOOGLE_DRIVE_API}/files/${fileId}?alt=media&supportsAllDrives=true`;
+        const url = `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
 
         logger.debug(`Fetching binary content for file ${fileId} from Drive: ${url}`);
 
@@ -214,10 +214,10 @@ export class GoogleDriveService {
      * in parallel and returns a merged response.
      */
     public async getSpreadsheetMetadata(spreadsheetId: string): Promise<GoogleSpreadsheetMetadataResponse> {
-        const driveUrl = `${GOOGLE_DRIVE_API}/files/${spreadsheetId}?fields=${encodeURIComponent(
+        const driveUrl = `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(spreadsheetId)}?fields=${encodeURIComponent(
             "owners,modifiedTime,createdTime",
         )}&supportsAllDrives=true`;
-        const sheetsUrl = `${GOOGLE_SHEETS_API}/${spreadsheetId}?includeGridData=false`;
+        const sheetsUrl = `${GOOGLE_SHEETS_API}/${encodeURIComponent(spreadsheetId)}?includeGridData=false`;
 
         logger.debug(`Fetching metadata for spreadsheet ${spreadsheetId}`);
 
@@ -269,7 +269,7 @@ export class GoogleDriveService {
      * causing performance bottlenecks. For reading data, use batchGetSpreadsheetValues() instead.
      */
     public async getSpreadsheetData(spreadsheetId: string): Promise<GoogleSpreadsheetApiResponse> {
-        const url = `${GOOGLE_SHEETS_API}/${spreadsheetId}`;
+        const url = `${GOOGLE_SHEETS_API}/${encodeURIComponent(spreadsheetId)}`;
 
         logger.debug(`Fetching complete spreadsheet ${spreadsheetId}: ${url}`);
 
@@ -298,7 +298,7 @@ export class GoogleDriveService {
         ranges: string[],
     ): Promise<GoogleSheetBatchValuesApiResponse> {
         const rangeParams = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join("&");
-        const url = `${GOOGLE_SHEETS_API}/${spreadsheetId}/values:batchGet?${rangeParams}`;
+        const url = `${GOOGLE_SHEETS_API}/${encodeURIComponent(spreadsheetId)}/values:batchGet?${rangeParams}`;
 
         logger.debug(`Batch fetching ${ranges.length} range(s) from spreadsheet ${spreadsheetId}: ${url}`);
 

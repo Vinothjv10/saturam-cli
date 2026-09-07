@@ -115,7 +115,7 @@ describe("HtmlNormalizerService", () => {
                 </table>`;
             const md = normalizer.convertHtmlToMarkdown(html);
             expect(md).toContain("| Name | Role |");
-            expect(md).toContain("| :--- | :--- |");
+            expect(md).toContain("| --- | --- |");
             expect(md).toContain("| Alice | Engineer |");
             expect(md).toContain("| Bob | Designer |");
         });
@@ -129,11 +129,11 @@ describe("HtmlNormalizerService", () => {
             expect(md).toContain("- Item B");
         });
 
-        it("should convert an ordered list", () => {
+        it("should convert an ordered list with correctly incrementing numbers", () => {
             const html = "<ol><li>First</li><li>Second</li></ol>";
             const md = normalizer.convertHtmlToMarkdown(html);
             expect(md).toContain("1. First");
-            expect(md).toContain("1. Second");
+            expect(md).toContain("2. Second");
         });
 
         it("should handle line breaks with <br>", () => {
@@ -141,6 +141,57 @@ describe("HtmlNormalizerService", () => {
             const md = normalizer.convertHtmlToMarkdown(html);
             expect(md).toContain("Line one");
             expect(md).toContain("Line two");
+        });
+
+        it("should correctly nest a sub-list under its parent item instead of merging text", () => {
+            const html = "<ul><li>A<ul><li>A1</li><li>A2</li></ul></li><li>B</li></ul>";
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).toContain("- A");
+            expect(md).toContain("- A1");
+            expect(md).toContain("- A2");
+            expect(md).toContain("- B");
+            // A1/A2 must not be merged into A's own line, and must be indented under it.
+            expect(md).not.toContain("AA1");
+            expect(md).not.toMatch(/^- A1/m);
+        });
+    });
+
+    describe("Confluence macro pre-processing", () => {
+        it("should resolve a Cloud user mention by account ID to an @mention", () => {
+            const html = '<ac:link><ri:user ri:account-id="abc123"/></ac:link>';
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).toBe("@abc123");
+        });
+
+        it("should resolve a Server user mention by username to an @mention", () => {
+            const html = '<ac:link><ri:user ri:username="jdoe"/></ac:link>';
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).toBe("@jdoe");
+        });
+
+        it("should resolve a page link to a Markdown link with the page title", () => {
+            const html = '<ac:link><ri:page ri:content-title="Onboarding Guide"/></ac:link>';
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).toContain("[Onboarding Guide]");
+        });
+
+        it("should resolve an attached image to alt text instead of dropping it", () => {
+            const html = '<ac:image><ri:attachment ri:filename="diagram.png"/></ac:image>';
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).toContain("diagram.png");
+        });
+
+        it("should decode numeric and named HTML entities", () => {
+            const html = "<p>It&#8217;s &copy; 2026</p>";
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).toContain("It’s");
+            expect(md).toContain("©");
+        });
+
+        it("should not leak unrecognized macro tags into the output", () => {
+            const html = '<ac:emoticon ac:name="smile"/>hi';
+            const md = normalizer.convertHtmlToMarkdown(html);
+            expect(md).not.toContain("ac:emoticon");
         });
     });
 });

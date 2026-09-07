@@ -4,7 +4,8 @@ import { resolve } from "path";
 import { Service } from "typedi";
 import { parseGoogleSheetUrl } from "../../integrations/google-drive/utils/google-drive-url.util";
 import { WorkingDirectory } from "../../utils/working-directory";
-import { ConfigService, OnboardConfig } from "../config-service";
+import { ConfigService } from "../config-service";
+import { OnboardConfig } from "./onboarding-config.schema";
 
 const logger = getLogger("OnboardingConfigService");
 
@@ -29,7 +30,9 @@ const ONBOARDING_CONFIG_TEMPLATE = {
                 tickets: ["PROJ-123"],
             },
             googleDocs: {
-                _comment: "'docs' accepts Google Docs/Sheets/.docx file IDs from the file's Google Drive URL.",
+                _comment:
+                    "'docs' accepts native Google Docs or .docx file IDs from the file's Google Drive URL. " +
+                    "For Google Sheets, use 'googleSheets' or 'onboardingSheets' below instead.",
                 docs: ["your-google-doc-id-here"],
             },
             googleSheets: {
@@ -48,7 +51,10 @@ const ONBOARDING_CONFIG_TEMPLATE = {
     },
 };
 
-const GOOGLE_SHEET_ID_PATTERN = /^[a-zA-Z0-9-_]{44}$/;
+// Google Drive file IDs aren't a fixed 44 characters — that was true of one generation of IDs
+// but isn't a stable contract. Accept a broad length range instead, and disambiguate from a file
+// path by requiring no "." or "/" (config paths always have one — an extension or a separator).
+const GOOGLE_SHEET_ID_PATTERN = /^[a-zA-Z0-9_-]{25,}$/;
 
 /**
  * Owns onboarding config file resolution/I/O (.sateng/onboarding.json) and the

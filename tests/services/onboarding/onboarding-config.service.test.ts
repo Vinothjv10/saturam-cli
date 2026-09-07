@@ -72,8 +72,17 @@ describe("OnboardingConfigService", () => {
             expect(service.parseSheetArg(id)).toBe(id);
         });
 
-        it("returns null for anything else", () => {
+        it("accepts sheet IDs of other lengths too, since Drive ID length isn't a fixed contract", () => {
+            expect(service.parseSheetArg("a".repeat(28))).toBe("a".repeat(28));
+            expect(service.parseSheetArg("a".repeat(60))).toBe("a".repeat(60));
+        });
+
+        it("returns null for a file path, even one long enough to otherwise match", () => {
             expect(service.parseSheetArg("./local-config.json")).toBeNull();
+            expect(service.parseSheetArg("/absolute/path/to/some-config-file.json")).toBeNull();
+        });
+
+        it("returns null for anything else", () => {
             expect(service.parseSheetArg("too-short")).toBeNull();
         });
     });

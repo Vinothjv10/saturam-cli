@@ -105,7 +105,6 @@ describe("OnboardService", () => {
             putObject: jest.fn().mockResolvedValue(undefined),
             listObjects: jest.fn().mockResolvedValue([]),
             objectExists: jest.fn().mockResolvedValue(false),
-            ensurePrefixExists: jest.fn().mockResolvedValue(undefined),
         } as any;
 
         service = new OnboardService(
@@ -220,6 +219,48 @@ describe("OnboardService", () => {
             expect(mockJiraSource.fetch).not.toHaveBeenCalled();
             expect(mockGoogleDriveSource.fetch).not.toHaveBeenCalled();
         });
+
+        it("does not cross-contaminate project filtering between two concurrent sync() calls on the same singleton instance", async () => {
+            const configFor = (baseUrl: string) => ({
+                projects: {
+                    Alpha: { confluence: { baseUrl, pages: ["a-page"] } },
+                    Beta: { confluence: { baseUrl, pages: ["b-page"] } },
+                },
+            });
+
+            // Both fetches resolve only after both sync() calls have started, so their
+            // projectNameOverride would collide if it were shared instance state instead of
+            // being threaded per-call.
+            let resolveA!: () => void;
+            let resolveB!: () => void;
+            const aStarted = new Promise<void>((resolve) => (resolveA = resolve));
+            const bStarted = new Promise<void>((resolve) => (resolveB = resolve));
+
+            mockConfluenceSource.fetch.mockImplementation(async (id: string) => {
+                if (id === "a-page") {
+                    resolveA();
+                    await bStarted;
+                } else {
+                    resolveB();
+                    await aStarted;
+                }
+                return makeDoc({ id, source: KnowledgeSourceType.CONFLUENCE, title: `Page ${id}` });
+            });
+
+            const [resultA, resultB] = await Promise.all([
+                service.sync(configFor("https://a.example.com"), "/mock/cwd", "Alpha"),
+                service.sync(configFor("https://b.example.com"), "/mock/cwd", "Beta"),
+            ]);
+
+            expect(resultA.filesWritten).toHaveLength(1);
+            expect(resultB.filesWritten).toHaveLength(1);
+
+            const paths = (writeFile as jest.Mock).mock.calls
+                .map((call) => String(call[0]))
+                .filter((p) => p.endsWith(".md"));
+            expect(paths.some((p) => p.includes("/alpha/"))).toBe(true);
+            expect(paths.some((p) => p.includes("/beta/"))).toBe(true);
+        });
     });
 
     describe("sync Confluence pages", () => {
@@ -261,6 +302,31 @@ describe("OnboardService", () => {
             });
         });
 
+        it("preserves a title's trailing digits when resolving an output-path collision instead of stripping them", async () => {
+            const config = {
+                confluence: {
+                    baseUrl: "https://confluence.example.com",
+                    pages: [
+                        { id: "111", outputPath: "docs/release-2026.md" },
+                        { id: "222", outputPath: "docs/release-2026.md" },
+                    ],
+                },
+            };
+
+            mockConfluenceSource.fetch.mockImplementation(async (id: string) =>
+                makeDoc({ id, source: KnowledgeSourceType.CONFLUENCE, title: "Release 2026" }),
+            );
+
+            const result = await service.sync(config, "/mock/cwd");
+
+            const paths = result.filesWritten.map((f) => f.contentPath);
+            // The second page's colliding outputPath must be renamed by appending a fresh "-2"
+            // suffix, not by corrupting the "2026" that the base name already ends in.
+            expect(paths).toContain("/mock/cwd/docs/release-2026.md");
+            expect(paths.some((p) => p.endsWith("release-2026-2.md"))).toBe(true);
+            expect(paths.some((p) => p.endsWith("release-2.md"))).toBe(false);
+        });
+
         it("should use listAllPagesInSpace to resolve space pages (no inline while loop)", async () => {
             const config = {
                 confluence: {
@@ -280,6 +346,24 @@ describe("OnboardService", () => {
             // Should delegate pagination to the service helper, not call listPagesInSpace directly
             expect(mockConfluence.listAllPagesInSpace).toHaveBeenCalledWith("https://confluence.example.com", "TST");
             expect(mockConfluenceSource.fetch).toHaveBeenCalledTimes(5);
+        });
+
+        it("skips global confluence.spaces entirely when filtering to a project, even if the space key happens to match", async () => {
+            const config = {
+                confluence: {
+                    baseUrl: "https://confluence.example.com",
+                    spaces: ["TST"],
+                },
+            };
+
+            const pages = Array.from({ length: 5 }, (_, i) => ({ id: `id-${i}` }));
+            mockConfluence.listAllPagesInSpace.mockResolvedValue(pages as any);
+
+            // A --project-name that happens to equal the space key must not accidentally pull
+            // this global space in — global entries are excluded entirely under a project filter.
+            await service.sync(config, "/mock/cwd", "TST");
+
+            expect(mockConfluence.listAllPagesInSpace).not.toHaveBeenCalled();
         });
 
         it("should use listAllPagesInSpace for project-level space config", async () => {
@@ -395,6 +479,41 @@ describe("OnboardService", () => {
             // Writes both the Markdown (uploaded/ingested content) and the JSON sidecar (local only).
             expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/\.md$/), "# Title\n", "utf8");
             expect(writeFile).toHaveBeenCalledWith(expect.stringMatching(/\.json$/), expect.any(String), "utf8");
+        });
+
+        it("renames instead of overwriting when two sheets in the same run share a title", async () => {
+            mockGoogleSheetsSource.fetch.mockImplementation(async (id: string) => ({
+                id,
+                source: KnowledgeSourceType.GOOGLE_SHEETS,
+                title: "Same Title",
+                content: `# ${id}\n`,
+                url: `https://docs.google.com/spreadsheets/d/${id}`,
+                metadata: { updatedAt: "2026-07-01" },
+                sheetRows: [["header1"], ["row1"]],
+                sheetRange: "Sheet1",
+            }));
+
+            const mdPaths: string[] = [];
+            (writeFile as jest.Mock).mockImplementation((path: string) => {
+                if (String(path).endsWith(".md")) mdPaths.push(String(path));
+                return Promise.resolve();
+            });
+
+            // "My Project" and "my-project" slugify to the same directory name, and both sheets
+            // resolve to "Same Title" — they must land in the same directory without one silently
+            // overwriting the other's content.
+            await service.sync(
+                {
+                    projects: {
+                        "My Project": { googleSheets: { spreadsheetId: "sheet-a" } },
+                        "my-project": { googleSheets: { spreadsheetId: "sheet-b" } },
+                    },
+                },
+                "/mock/cwd",
+            );
+
+            expect(mdPaths).toHaveLength(2);
+            expect(new Set(mdPaths).size).toBe(2);
         });
     });
 
@@ -541,8 +660,8 @@ describe("OnboardService", () => {
 
             expect(mockGoogleDrive.getSpreadsheetMetadata).toHaveBeenCalledWith("multi-tab-sheet-id");
             expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("multi-tab-sheet-id", [
-                "ProjectAlpha",
-                "ProjectBeta",
+                "'ProjectAlpha'",
+                "'ProjectBeta'",
             ]);
 
             // Verify that resolved tasks were parsed with correct projectNames (i.e. tab titles)
@@ -622,15 +741,16 @@ describe("OnboardService", () => {
             expect(mockS3.putObject).not.toHaveBeenCalled();
         });
 
-        it("ensures each folder prefix exists, then uploads content + a Bedrock metadata sidecar per file", async () => {
+        it("uploads content + a Bedrock metadata sidecar per file, without any 'folder' marker object", async () => {
             (mockS3.objectExists as jest.Mock).mockResolvedValue(false);
             (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
 
             const result = await service.uploadToS3(files);
 
             expect(result).toEqual({ uploaded: 2, skipped: 0, failed: 0 });
-            expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("saturam/google-docs");
-            expect(mockS3.ensurePrefixExists).toHaveBeenCalledWith("saturam/google-sheets");
+            // S3 has no real directories — no key should ever be a bare "<prefix>/" marker.
+            const uploadedKeys = (mockS3.putObject as jest.Mock).mock.calls.map((call) => call[0]);
+            expect(uploadedKeys.some((k: string) => k.endsWith("/"))).toBe(false);
 
             // Content object
             expect(mockS3.putObject).toHaveBeenCalledWith(
@@ -663,6 +783,22 @@ describe("OnboardService", () => {
                 expect.anything(),
                 expect.anything(),
             );
+        });
+
+        it("falls back to a flat 'external/<basename>' key for a contentPath outside the onboarding directory", async () => {
+            (mockS3.objectExists as jest.Mock).mockResolvedValue(false);
+            (readFile as jest.Mock).mockResolvedValue(Buffer.from("content"));
+
+            const escapingFile: SyncedDocument = {
+                contentPath: "/tmp/custom-output/report.md",
+                metadataAttributes: { title: "Report" },
+            };
+
+            await service.uploadToS3([escapingFile]);
+
+            expect(mockS3.putObject).toHaveBeenCalledWith("external/report.md", expect.any(Buffer), "text/markdown");
+            const uploadedKeys = (mockS3.putObject as jest.Mock).mock.calls.map((call) => call[0]);
+            expect(uploadedKeys.some((k: string) => k.includes(".."))).toBe(false);
         });
 
         it("re-uploads content and metadata sidecar even if the key already exists in S3, so edits are never frozen out", async () => {
@@ -790,7 +926,7 @@ describe("OnboardService", () => {
 
             const config = await service.resolveConfigFromSheet("projects-sheet-id");
 
-            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("projects-sheet-id", ["Sheet1"]);
+            expect(mockGoogleDrive.batchGetSpreadsheetValues).toHaveBeenCalledWith("projects-sheet-id", ["'Sheet1'"]);
             // Base URLs are written into each project's own entry, not a shared top-level block —
             // otherwise two projects on different Atlassian sites would clobber each other's host.
             expect(config.confluence).toBeUndefined();
