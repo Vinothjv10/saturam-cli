@@ -126,4 +126,31 @@ describe("InitCommand Platform Config Flow", () => {
 
         fetchSpy.mockRestore();
     });
+
+    it("drops the remote credential block when the Bedrock step is told to disable it", async () => {
+        // The step computed "disable" but never returned it, so the saved config kept the remote
+        // block and every Bedrock call still fetched credentials from the remote API.
+        mockConfig.loadPersonalConfig.mockResolvedValue({
+            defaultModel: LLMModel.BEDROCK_CLAUDE_4_5_HAIKU,
+            providers: { [AIProvider.BEDROCK]: { enabled: true, awsProfile: "stale-profile", awsRegion: "us-east-1" } },
+            remote: { url: "https://example.execute-api.us-east-1.amazonaws.com", token: "t0ken" },
+        });
+
+        // top-level "ai_providers" -> action "add" -> provider "bedrock"
+        (select as jest.Mock)
+            .mockResolvedValueOnce("ai_providers")
+            .mockResolvedValueOnce("add")
+            .mockResolvedValueOnce(AIProvider.BEDROCK);
+        // "Configure remote AWS credential API URL?" -> no; "Disable remote credentials?" -> yes
+        (confirm as jest.Mock).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        // profile (empty: default chain), region
+        (input as jest.Mock).mockResolvedValueOnce("").mockResolvedValueOnce("ap-south-1");
+
+        await command.execute({});
+
+        const saved = mockConfig.savePersonalConfig.mock.calls.at(-1)![0];
+        expect(saved).not.toHaveProperty("remote");
+        expect(saved.providers![AIProvider.BEDROCK]).toMatchObject({ enabled: true, awsRegion: "ap-south-1" });
+        expect(saved.providers![AIProvider.BEDROCK]!.awsProfile).toBeUndefined();
+    });
 });

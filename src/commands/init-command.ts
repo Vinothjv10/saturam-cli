@@ -836,6 +836,7 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 awsRegion,
             },
             remoteConfig,
+            remoteExplicitlyDisabled,
         };
     }
 

@@ -10,6 +10,7 @@ import { AnswerFlowService } from "../services/knowledge/answer-flow.service";
 import { FollowUp } from "../services/knowledge/agents/follow-up-generator.agent";
 import { DOCUMENT_KINDS, DocumentKind } from "../services/knowledge/knowledge-source.model";
 import { ConfigService } from "../services/config-service";
+import { explainBedrockModelError } from "../services/llm-service";
 import { stripInlineCitations } from "../utils/citations.util";
 import { slugify } from "../utils/slug.util";
 import { TypedCommand, TypedInputs } from "./base";
@@ -313,7 +314,10 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
                 }
                 queuedQuestion = next;
             } catch (err) {
-                logger.error(`Chat failed: ${(err as Error).message}\n`);
+                logger.error(`Chat failed: ${(err as Error).message}`);
+                const advice = explainBedrockModelError(err);
+                if (advice) logger.info(advice);
+                logger.info("");
             }
         }
     }
