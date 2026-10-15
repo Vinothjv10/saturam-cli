@@ -5,9 +5,10 @@ import { markedTerminal } from "marked-terminal";
 import * as colors from "yoctocolors-cjs";
 import { Service } from "typedi";
 import { z } from "zod";
-import { KnowledgeBaseChatService } from "../services/knowledge/knowledge-base-chat.service";
+import { KnowledgeBaseChatService, SearchScope } from "../services/knowledge/knowledge-base-chat.service";
 import { AnswerFlowService } from "../services/knowledge/answer-flow.service";
 import { FollowUp } from "../services/knowledge/agents/follow-up-generator.agent";
+import { DOCUMENT_KINDS, DocumentKind } from "../services/knowledge/knowledge-source.model";
 import { ConfigService } from "../services/config-service";
 import { stripInlineCitations } from "../utils/citations.util";
 import { slugify } from "../utils/slug.util";
@@ -20,6 +21,18 @@ const INPUTS = [
         name: "project",
         description:
             'Only with --knowledge-base: limit retrieval to documents indexed for this project (for example, --project "Saturam"). The chat determines the project automatically per question and does not accept this.',
+        schema: z.string().optional(),
+    },
+    {
+        name: "kind",
+        description:
+            "Only with --knowledge-base: what to retrieve from — 'docs' for written documentation, 'code' for indexed source files, 'all' (default) for both.",
+        schema: z.enum(DOCUMENT_KINDS as [DocumentKind, ...DocumentKind[]]).optional(),
+    },
+    {
+        name: "repo",
+        description:
+            "Only with --knowledge-base: limit retrieval to one repository's source files, as workspace/repo-slug (implies --kind code).",
         schema: z.string().optional(),
     },
     {
@@ -64,15 +77,21 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
     public async execute(inputs: Partial<TypedInputs<typeof INPUTS>>): Promise<void> {
         if (inputs["knowledge-base"]) {
-            await this.runKnowledgeBaseSearch(inputs.project);
+            await this.runKnowledgeBaseSearch({
+                project: this.normalizeProjectName(inputs.project),
+                kind: inputs.kind,
+                repo: inputs.repo?.trim() || undefined,
+            });
             return;
         }
 
-        // Loud rather than ignored: someone passing --project wants answers scoped to a project,
-        // which the chat does not offer, and a warning would scroll past before the first prompt.
-        if (inputs.project) {
+        // Loud rather than ignored: someone passing a retrieval filter wants answers scoped by
+        // it, which the chat does not offer, and a warning would scroll past before the first prompt.
+        const scoped = (["project", "kind", "repo"] as const).filter((flag) => inputs[flag]);
+        if (scoped.length > 0) {
+            const flags = scoped.map((flag) => `--${flag}`).join(", ");
             throw new Error(
-                "--project applies only to --knowledge-base. The chat determines the project automatically per question, so run `sat-cli onboard` without it.",
+                `${flags} applies only to --knowledge-base. The chat determines the project automatically per question and searches documentation and code as the question needs, so run \`sat-cli onboard\` without it.`,
             );
         }
 
@@ -145,10 +164,11 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
      * Retrieve (no generation — equivalent to the AWS console's "Retrieve only" test mode),
      * and prints the ranked chunks. Exits on blank input, "exit"/"quit", or Ctrl+C.
      */
-    private async runKnowledgeBaseSearch(projectName?: string): Promise<void> {
-        const project = this.normalizeProjectName(projectName);
+    private async runKnowledgeBaseSearch(scope: SearchScope): Promise<void> {
         logger.info("Bedrock Knowledge Base search (Retrieve only — no answer generation).");
-        if (project) logger.info(`Project filter: ${project}`);
+        if (scope.project) logger.info(`Project filter: ${scope.project}`);
+        if (scope.repo) logger.info(`Repository filter: ${scope.repo} (code only)`);
+        else if (scope.kind && scope.kind !== "all") logger.info(`Kind filter: ${scope.kind}`);
         logger.info("Type a question and press Enter. Type 'exit' or leave blank to quit.\n");
 
         for (;;) {
@@ -160,7 +180,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
             try {
                 const results = await this.withLoading("Retrieving matching knowledge base chunks", () =>
-                    this.chatService.search(question, { project }),
+                    this.chatService.search(question, scope),
                 );
                 if (results.length === 0) {
                     logger.info("No matching results found.\n");

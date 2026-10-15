@@ -1,5 +1,5 @@
 import { AIMessage } from "@langchain/core/messages";
-import { MentorAgentService } from "../../../../src/services/knowledge/agent/mentor-agent.service";
+import { MAX_TOOL_ROUNDS, MentorAgentService } from "../../../../src/services/knowledge/agent/mentor-agent.service";
 import { KnowledgeToolFactory } from "../../../../src/services/knowledge/agent/knowledge-tools";
 
 const project = { slug: "orion", displayName: "Orion", aliases: [], sources: [] };
@@ -18,13 +18,19 @@ const withToolCall = (name: string, args: Record<string, unknown>, id = "c1") =>
 describe("MentorAgentService", () => {
     let knowledgeBase: any;
     let registry: any;
+    let reader: any;
+    let codeIndex: any;
     let llm: any;
     let bound: any;
     let agent: MentorAgentService;
 
     const buildAgent = (model: any) => {
         llm = { getModel: jest.fn().mockResolvedValue(model), prompt: jest.fn().mockResolvedValue("forced answer") };
-        return new MentorAgentService(llm, new KnowledgeToolFactory(knowledgeBase, registry), registry);
+        return new MentorAgentService(
+            llm,
+            new KnowledgeToolFactory(knowledgeBase, registry, reader, codeIndex),
+            registry,
+        );
     };
 
     beforeEach(() => {
@@ -33,6 +39,16 @@ describe("MentorAgentService", () => {
             getBySlug: jest.fn().mockResolvedValue(project),
             load: jest.fn().mockResolvedValue({ projects: [project] }),
         };
+        reader = {
+            documentIdOf: jest.fn().mockResolvedValue(undefined),
+            read: jest.fn().mockResolvedValue({
+                key: "orion/bitbucket/core/jobs/nightly.py.md",
+                path: "jobs/nightly.py",
+                content: "1 | def run():",
+                identifiers: ["jobs/nightly.py"],
+            }),
+        };
+        codeIndex = { repositories: jest.fn().mockResolvedValue([]), find: jest.fn(), listDirectory: jest.fn() };
         bound = { invoke: jest.fn() };
         agent = buildAgent({ bindTools: jest.fn().mockReturnValue(bound) });
     });
@@ -46,13 +62,28 @@ describe("MentorAgentService", () => {
 
         const result = await ask();
 
-        expect(knowledgeBase.retrieve).toHaveBeenCalledWith(
-            "scheduler",
-            expect.objectContaining({ project: undefined }),
-        );
+        // No project, no kind: the broadest search there is.
+        expect(knowledgeBase.retrieve).toHaveBeenCalledWith("scheduler", { numberOfResults: 12 });
         expect(result.answer).toBe("It reads a jobs table.");
         expect(result.chunks).toHaveLength(1);
         expect(result.projectSlug).toBe("orion");
+    });
+
+    it("hands the flow every name it saw by reading, so the guard does not take it back", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("search_documentation", { query: "nightly job", kind: "code" }))
+            .mockResolvedValueOnce(withToolCall("read_document", { document: "acme/core:jobs/nightly.py" }, "c2"))
+            .mockResolvedValueOnce(new AIMessage({ content: "It is in `jobs/nightly.py`." }));
+
+        const result = await ask("where is the nightly job?");
+
+        expect(knowledgeBase.retrieve).toHaveBeenCalledWith(
+            "nightly job",
+            expect.objectContaining({ category: "bitbucket" }),
+        );
+        expect(reader.read).toHaveBeenCalledWith("acme/core:jobs/nightly.py", expect.anything());
+        expect(String(bound.invoke.mock.calls[2][0].at(-1).content)).toBe("1 | def run():");
+        expect(result.knownIdentifiers).toContain("jobs/nightly.py");
     });
 
     it("lets the agent search again when the first query misses", async () => {
@@ -151,7 +182,7 @@ describe("MentorAgentService", () => {
 
         expect(result.answer).toBe("forced answer");
         expect(llm.prompt).toHaveBeenCalled();
-        expect(bound.invoke).toHaveBeenCalledTimes(6);
+        expect(bound.invoke).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS);
     });
 
     it("de-duplicates chunks seen by more than one search", async () => {

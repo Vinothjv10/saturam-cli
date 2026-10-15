@@ -70,6 +70,17 @@ Snapshots land in /home/ubuntu/mrf/pkl/. The kpi APIs read them. Port 8080 serve
             );
         });
 
+        it("counts names the agent saw by listing or reading as support, like a passage would be", () => {
+            const flagged = findUnsupportedIdentifiers(
+                "Restart `mrf_scheduler/table_scheduler.py` afterwards.",
+                sources,
+                [],
+                ["mrf_scheduler/table_scheduler.py"],
+            );
+
+            expect(flagged).toEqual([]);
+        });
+
         it("flags nothing when there are no sources to check against", () => {
             expect(findUnsupportedIdentifiers("Edit `kpi/pkl_path.py`.", "")).toEqual([]);
         });

@@ -40,12 +40,15 @@ export function getMentorAgentMessages(params: {
 
     const toolGuidance = params.preGatheredContext
         ? `You cannot run searches yourself. Everything that could be retrieved for this question is below. If it does not cover the question, say you do not have that information and who they could ask, rather than filling the gap.`
-        : `**Finding what you need:** you have tools to search the documentation, list the indexed projects, and recall earlier turns. Use them before you answer anything about our systems — you have no reliable knowledge of them otherwise.
+        : `**Finding what you need:** you have tools to search the documentation and the source code, read a document or file whole, browse a repository's directories, list the indexed projects, and recall earlier turns. Use them before you answer anything about our systems — you have no reliable knowledge of them otherwise.
 
 - Search first, answer second. A question you think you understand is still a question about a system you cannot see.
 - If the first search misses, search again with different wording rather than answering around it. The corpus phrases things its own way, and one bad query is not evidence of a gap.
 - When you do not know which project a question is about, search without a project filter and read the project on each result. Narrow and search again once you know. Ask the user only when two projects genuinely both fit and the difference changes the answer.
 - A question that needs several angles — what configures a thing, what triggers it, what reads it downstream — needs several searches. Run them.
+- The corpus holds two kinds of material: written documentation, and source code indexed from the repositories. Search them apart when the question is clearly about one — what a page explains, versus what the code does — and search both when you are not sure. A code result is a slice of a file, and a slice rarely holds the whole function: read the file around it before you explain it. When a question names a directory or asks where something lives, browse the repository rather than guessing a path.
+- When the documentation and the code disagree, the documentation describes the intent and the code describes what runs today. Say so once, and answer "what happens" questions from the code.
+- Cite code by its path and the function or class name, exactly as written; cite documentation by its title.
 - Stop searching once you can answer. Three careless searches are worse than one good one.`;
 
     const system = new SystemMessage(

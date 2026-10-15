@@ -88,7 +88,7 @@ sat-cli init
 
 ### `sat-cli onboard`
 
-Ask questions about your projects, answered from the onboarding documentation indexed in the Bedrock Knowledge Base.
+Ask questions about your projects, answered from the onboarding documentation and the source code indexed in the Bedrock Knowledge Base.
 
 ```bash
 # Chat: ask questions and get a mentoring answer grounded in the Knowledge Base.
@@ -103,6 +103,13 @@ sat-cli onboard --knowledge-base
 
 # Restrict that retrieval to one project's indexed documents
 sat-cli onboard --knowledge-base --project "Saturam"
+
+# Retrieve from the written documentation only, or from the indexed source code only
+sat-cli onboard --knowledge-base --kind docs
+sat-cli onboard --knowledge-base --kind code
+
+# Retrieve from one repository's code
+sat-cli onboard --knowledge-base --repo "workspace/repo-slug"
 ```
 
 Running it with no options starts the chat; `--knowledge-base` is the only other mode.
@@ -118,7 +125,7 @@ Running it with no options starts the chat; `--knowledge-base` is the only other
 
 Each question goes to a single mentor agent that searches the Knowledge Base as it needs to, rather than through a fixed retrieve-then-summarize step:
 
-1. **Search until it can answer** — the agent searches broadly or within one project, looks up which projects are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss.
+1. **Search until it can answer** — the agent searches broadly or within one project, across the written documentation and the indexed source code or either alone, looks up which projects and repositories are indexed, and recalls earlier turns, choosing which of these a question needs and searching again with different wording when the first results miss. A search result is a slice; when the slice is code, the agent reads the file whole from S3 before explaining it, and browses a repository's directories when a question asks where something lives.
 2. **Project from the evidence** — the project an answer is labelled with is read off the documents it retrieved, not decided in advance. When those documents come from more than one project, the answer is given without a project label; you are never asked to choose one.
 3. **Mentoring answer** — explains the thing the way a senior engineer would, at the length the question deserves, rather than quoting document excerpts back. When it does not have something, it says so in its own words and points you to your manager, team lead or the owning team, with the general way to find it out where there is one. Anything the answer names that the sources do not mention is revised out, and anything shaped like a credential is redacted.
 4. **Follow-up suggestions** — up to three short questions you can select to keep going. Each is drawn from a document the answer retrieved and checked against the Knowledge Base before it is shown; an answer that retrieved nothing offers none.
@@ -127,9 +134,11 @@ Conversation history is kept so follow-ups work: "and how does it fail?" is unde
 
 For more on how the corpus is built and queried, see [ONBOARDING.md](ONBOARDING.md). The sheet format that drives ingestion is documented with the Lambda that reads it, in `sat-cli-internal-infra/onboarding-gsheet-lamba` (`SHEET-COLUMNS.md`).
 
-`--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
+`--knowledge-base` opens an interactive prompt in the terminal. Enter a question to display the ranked chunks, relevance scores, source locations, and metadata returned by Bedrock. This uses the Knowledge Base `Retrieve` API—the equivalent of the AWS console's **Standard retrieval only** mode—and does not generate an AI answer. `--kind docs|code|all` and `--repo workspace/repo-slug` narrow it the way the chat's own searches can be narrowed, which is how to check what retrieval returns for code apart from prose. Submit an empty question, type `exit`, `quit`, or `:q`, or press Ctrl+C to leave the prompt.
 
-The chat (bare `sat-cli onboard`) is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project` applies only to `--knowledge-base`; the chat refuses it and infers the project from what it retrieves. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured.
+The chat (bare `sat-cli onboard`) is the RAG version: it uses the same Knowledge Base retrieval as `--knowledge-base`, but your **configured LLM** (whichever AI/LLM provider and model are set up via `sat-cli init` → "AI / LLM providers" — Anthropic, OpenAI, Gemini, Bedrock, etc.) runs the searches and writes a synthesized answer from what they return instead of printing raw chunks. `--project`, `--kind` and `--repo` apply only to `--knowledge-base`; the chat refuses them and decides per question which project, and which kind of material, a question needs. If no LLM provider is configured yet, it tells you to run `sat-cli init` first instead of failing partway through. Requires both an LLM provider and Bedrock Knowledge Base to be configured; reading files whole and browsing repositories also need the S3 bucket configured, since those read the documents and the pipeline's code index directly rather than through Bedrock.
+
+If the Knowledge Base's vector store supports hybrid search (OpenSearch Serverless does; S3 Vectors does not), set `searchType` to `HYBRID` under the Bedrock Knowledge Base config, or `SATENG_KB_SEARCH_TYPE=HYBRID`: keyword matching is what finds an identifier such as a function or table name in code, where pure vector search can miss it.
 
 ## Cloud (AWS S3 & Bedrock Knowledge Base)
 

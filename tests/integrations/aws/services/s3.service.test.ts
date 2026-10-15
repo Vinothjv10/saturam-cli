@@ -104,6 +104,28 @@ describe("S3Service", () => {
         );
     });
 
+    it("listStateObjects lists under the state prefix, scoped to whole path segments", async () => {
+        mockConfig.getS3Config.mockResolvedValue({
+            bucket: "my-bucket",
+            prefix: "onboarding",
+            statePrefix: "onboarding-state",
+            region: "us-east-1",
+        });
+        mockSend.mockResolvedValueOnce({
+            Contents: [{ Key: "onboarding-state/code-index/orion/core.json" }],
+            IsTruncated: false,
+        });
+
+        const keys = await service.listStateObjects("code-index/orion");
+
+        expect(keys).toEqual(["onboarding-state/code-index/orion/core.json"]);
+        expect(mockSend).toHaveBeenCalledWith(
+            expect.objectContaining({
+                input: expect.objectContaining({ Prefix: "onboarding-state/code-index/orion/" }),
+            }),
+        );
+    });
+
     it("listObjects paginates through all pages and returns keys", async () => {
         mockSend
             .mockResolvedValueOnce({

@@ -143,6 +143,18 @@ describe("OnboardCommand Mode Routing", () => {
 
             expect(input).toHaveBeenCalledTimes(2);
         });
+
+        it("passes --kind and --repo through to retrieval, so code can be inspected apart from prose", async () => {
+            (input as jest.Mock).mockResolvedValueOnce("where is the nightly job?").mockResolvedValueOnce("");
+
+            await command.execute({ ...kbInputs, kind: "code", repo: "acme/orion-core" });
+
+            expect(mockChatService.search).toHaveBeenCalledWith("where is the nightly job?", {
+                project: undefined,
+                kind: "code",
+                repo: "acme/orion-core",
+            });
+        });
     });
 
     describe("the chat (bare `sat-cli onboard`)", () => {
@@ -188,6 +200,14 @@ describe("OnboardCommand Mode Routing", () => {
             // Loud rather than ignored: a manual filter that silently did nothing is the failure
             // mode the redesign removed, and a warning would scroll past the first prompt.
             expect(input).not.toHaveBeenCalled();
+            expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
+        });
+
+        it("refuses --kind and --repo the same way, since the agent chooses what to search per question", async () => {
+            await expect(command.execute({ ...chatInputs, kind: "code", repo: "acme/orion-core" })).rejects.toThrow(
+                /--kind, --repo applies only to --knowledge-base/,
+            );
+
             expect(mockAnswerFlow.ask).not.toHaveBeenCalled();
         });
 
@@ -292,7 +312,7 @@ describe("OnboardCommand Mode Routing", () => {
 
         it("no longer accepts the retired sync flags", () => {
             const names = command.inputs.map((i) => i.name);
-            expect(names).toEqual(["project", "knowledge-base", "new-session"]);
+            expect(names).toEqual(["project", "kind", "repo", "knowledge-base", "new-session"]);
             for (const retired of ["configOrSheet", "project-name", "upload-to-s3", "list", "format", "force"]) {
                 expect(names).not.toContain(retired);
             }

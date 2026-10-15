@@ -146,9 +146,16 @@ export function extractIdentifiers(answer: string, knownExtensions: Iterable<str
 /**
  * Identifiers from the answer that neither the sources nor the earlier conversation contain.
  * Earlier answers count as support: a fact established two turns ago is not an invention now.
+ * So do names the agent saw by other means than a retrieved passage — a file it listed while
+ * browsing a repository, a document it read whole — which `knownIdentifiers` carries.
  */
-export function findUnsupportedIdentifiers(answer: string, sources: string, priorAnswers: string[] = []): string[] {
-    const supporting = [sources, ...priorAnswers].join("\n");
+export function findUnsupportedIdentifiers(
+    answer: string,
+    sources: string,
+    priorAnswers: string[] = [],
+    knownIdentifiers: Iterable<string> = [],
+): string[] {
+    const supporting = [sources, ...priorAnswers, ...knownIdentifiers].join("\n");
     const haystack = supporting.toLowerCase();
     if (!haystack.trim()) return [];
 

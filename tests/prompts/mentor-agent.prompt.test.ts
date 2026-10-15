@@ -36,6 +36,36 @@ describe("mentor agent prompt", () => {
         });
     });
 
+    describe("code beside documentation", () => {
+        it("tells the agent the corpus holds both, and to search them apart when the question is about one", () => {
+            const text = systemTextOf();
+            expect(text).toContain("written documentation, and source code indexed from the repositories");
+            expect(text).toContain("Search them apart when the question is clearly about one");
+        });
+
+        it("has the agent read a file before explaining a slice of it, and browse rather than guess a path", () => {
+            const text = systemTextOf();
+            expect(text).toContain("read the file around it before you explain it");
+            expect(text).toContain("browse the repository rather than guessing a path");
+        });
+
+        it("settles a disagreement between documentation and code in favour of the code for what happens", () => {
+            expect(systemTextOf()).toContain(
+                "the documentation describes the intent and the code describes what runs today",
+            );
+        });
+
+        it("asks for code to be cited by path and symbol, exactly as written", () => {
+            expect(systemTextOf()).toContain(
+                "Cite code by its path and the function or class name, exactly as written",
+            );
+        });
+
+        it("says none of this when the provider cannot call tools", () => {
+            expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("browse the repository");
+        });
+    });
+
     describe("general knowledge when the corpus is silent", () => {
         it("scopes the never-invent rule to claims about our systems", () => {
             const text = systemTextOf();

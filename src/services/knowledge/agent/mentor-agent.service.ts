@@ -20,9 +20,11 @@ const TEMPERATURE = 0.3;
 /**
  * Ceiling on tool-calling rounds. Not a budget the agent is expected to spend — most questions
  * settle in one or two searches. It exists so a model that keeps re-searching instead of
- * answering cannot hang the terminal.
+ * answering cannot hang the terminal. Raised from six when reading and browsing arrived: a
+ * question about code is often search, browse, read, read, answer, and six left no room for a
+ * second search when the first one missed.
  */
-const MAX_TOOL_ROUNDS = 6;
+export const MAX_TOOL_ROUNDS = 10;
 
 /** A model exposing LangChain's tool binding. SelfHostedChatModel is a bare `invoke`, and some
  *  Ollama builds are served by backends without tool support, so it is detected, not assumed. */
@@ -40,6 +42,11 @@ export interface MentorAnswer {
     chunks: RetrievedChunk[];
     /** The project the evidence settled on, if the chunks agree on one. */
     projectSlug?: string;
+    /**
+     * Names the agent saw by listing or reading rather than in a retrieved passage — a path from
+     * a directory listing, a document it read whole. The identifier guard counts them as support.
+     */
+    knownIdentifiers: string[];
 }
 
 /**
@@ -93,7 +100,9 @@ export class MentorAgentService {
                 // An empty final message with no tool calls means the model has nothing more to
                 // say and never said anything. One more round would only repeat it.
                 if (answer) {
-                    logger.debug(`Answered after ${executor.searchCount} search(es), ${round + 1} round(s).`);
+                    logger.debug(
+                        `Answered after ${executor.searchCount} search(es), ${executor.readCount} read(s), ${round + 1} round(s).`,
+                    );
                     return this.finish(answer, executor);
                 }
                 break;
@@ -156,7 +165,12 @@ export class MentorAgentService {
     }
 
     private async finish(answer: string, executor: KnowledgeToolExecutor): Promise<MentorAnswer> {
-        return { answer, chunks: executor.chunks, projectSlug: await this.dominantProject(executor.chunks) };
+        return {
+            answer,
+            chunks: executor.chunks,
+            projectSlug: await this.dominantProject(executor.chunks),
+            knownIdentifiers: executor.knownIdentifiers,
+        };
     }
 
     /**

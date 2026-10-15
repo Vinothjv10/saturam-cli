@@ -145,23 +145,27 @@ sat-cli onboard
 sat-cli onboard --new-session
 ```
 
-There is no `--project` flag here — the project is determined per question. `--project` still applies to `--knowledge-base`, which is a raw retrieval tool.
+There is no `--project` flag here — the project is determined per question. `--project`, `--kind docs|code|all` and `--repo workspace/repo-slug` still apply to `--knowledge-base`, which is a raw retrieval tool.
 
 ##### The answering flow
 
-Each question goes to one mentor agent (`MentorAgentService`), wired by `AnswerFlowService`. There is no fixed classify → route → retrieve → write pipeline: the agent is given three tools and decides which a question needs.
+Each question goes to one mentor agent (`MentorAgentService`), wired by `AnswerFlowService`. There is no fixed classify → route → retrieve → write pipeline: the agent is given five tools and decides which a question needs.
 
-| Tool                   | What the agent uses it for                                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `search_documentation` | Retrieves passages, broadly or narrowed to one project; called again with different wording when results miss |
-| `list_projects`        | Says what is indexed, and the exact slug for a project the user named                                         |
-| `recall_conversation`  | Reaches turns older than the verbatim window, including ones from earlier sessions                            |
+| Tool                   | What the agent uses it for                                                                                                                                                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `search_documentation` | Retrieves passages, broadly or narrowed to one project, to written documentation or to source code (`kind`), or to one repository (`repo`); called again with different wording when results miss                                                   |
+| `read_document`        | Reads a document or source file whole from S3, by the `document:` id a search result shows or as `workspace/repo:path`, with line numbers and line ranges for code; a search result is a slice, and a slice of code rarely holds the whole function |
+| `browse_repository`    | Lists a project's repositories, or one directory of one repository, from the code index the pipeline writes under the state prefix; every path it returns is real and readable                                                                      |
+| `list_projects`        | Says what is indexed — projects, their document counts per source and their repositories — and the exact slug for a project the user named                                                                                                          |
+| `recall_conversation`  | Reaches turns older than the verbatim window, including ones from earlier sessions                                                                                                                                                                  |
 
-The agent searches until it can answer, within six tool rounds. A model without tool calling gets one search on the question and a single prompt instead.
+The agent searches, reads and browses until it can answer, within ten tool rounds and six reads of about 60 KB each. A model without tool calling gets one search on the question and a single prompt instead.
+
+**Code beside documentation.** Since the pipeline indexes source code from Bitbucket under `<project>/bitbucket/<repo>/`, the corpus holds two kinds of material, and the prompt tells the agent to treat them as such: search them apart when a question is clearly about one, read a file around a code hit before explaining it, browse rather than guess a path, and when the two disagree, take the documentation as the intent and the code as what runs today. Reading and browsing go to S3 directly — the documents under the content prefix and the pipeline's `code-index/` state files — never to Bitbucket, so the Slack worker needs only `s3:GetObject` on those and nothing can reach a repository at query time.
 
 **Project attribution.** The project shown above an answer is read off the retrieved chunks' `project` metadata, not decided before searching. When the chunks come from more than one project, the answer is shown without a project label. You are never asked to choose a project.
 
-**Checks on the answer.** Two guards run in code on whatever the model wrote. Any file, path, script or table the answer names that appears in neither the sources nor the recent conversation triggers one revision, and anything shaped like a credential is redacted.
+**Checks on the answer.** Two guards run in code on whatever the model wrote. Any file, path, script or table the answer names that appears in neither the sources nor the recent conversation triggers one revision, and anything shaped like a credential is redacted. A name the agent met by browsing a repository or reading a file whole counts as support, the same as a retrieved passage: the agent reports every such name alongside its answer, so a correct path taken from a directory listing is not revised away.
 
 **Follow-ups.** Each suggestion is drawn from one of the documents the answer retrieved and must cite it. One that cites nothing, or whose best matches in the Knowledge Base are not among those documents, is dropped before it is shown — a suggestion the corpus cannot answer wastes a turn. An answer that retrieved nothing offers none. Select one to continue, or choose "Let me put it another way" to type your own.
 

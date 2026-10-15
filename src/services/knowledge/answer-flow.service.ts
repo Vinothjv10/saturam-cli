@@ -115,7 +115,13 @@ export class AnswerFlowService {
         // are taken back by a single revision; anything shaped like a credential is redacted. The
         // reader sees the corrected answer, never a warning about it.
         const answer = this.withSecretsRedacted(
-            await this.withUnsupportedIdentifiersRevised(question, produced.answer, produced.chunks, recentTurns),
+            await this.withUnsupportedIdentifiersRevised(
+                question,
+                produced.answer,
+                produced.chunks,
+                recentTurns,
+                produced.knownIdentifiers ?? [],
+            ),
         );
 
         const [followUps, answerGist] = await Promise.all([
@@ -168,19 +174,25 @@ export class AnswerFlowService {
      * sources nor the earlier conversation. A string check, not a judgement, so it does not
      * suffer the false alarms a model-judged audit did on exactly this task — and the correction
      * is applied to the answer rather than announced under it.
+     *
+     * A name the agent met by browsing a repository or reading a file whole is as real as one a
+     * passage contained, which is what `knownIdentifiers` carries; without it a correct path
+     * taken from a directory listing would be revised away as an invention.
      */
     private async withUnsupportedIdentifiersRevised(
         question: string,
         answer: string,
         chunks: RetrievedChunk[],
         recentTurns: ChatTurn[],
+        knownIdentifiers: string[],
     ): Promise<string> {
-        if (chunks.length === 0) return answer;
+        if (chunks.length === 0 && knownIdentifiers.length === 0) return answer;
         const sources = chunks.map((chunk) => chunk.content).join("\n");
         const unsupported = findUnsupportedIdentifiers(
             answer,
             sources,
             recentTurns.map((turn) => turn.answer),
+            knownIdentifiers,
         );
         if (unsupported.length === 0) return answer;
 

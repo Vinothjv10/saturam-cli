@@ -135,6 +135,20 @@ describe("AnswerFlowService", () => {
         expect(result.answer).toContain("scripts/totally_made_up.sh");
     });
 
+    it("accepts a path the agent saw in a listing or a read, even though no passage contains it", async () => {
+        mentor.answer.mockResolvedValue({
+            answer: "The job is defined in `jobs/nightly.py`.",
+            chunks: [{ content: "unrelated passage", location: "s3://docs/a.md" }],
+            projectSlug: undefined,
+            knownIdentifiers: ["jobs/nightly.py"],
+        });
+
+        const result = await flow.ask("where is the nightly job defined?");
+
+        expect(writer.revise).not.toHaveBeenCalled();
+        expect(result.answer).toContain("jobs/nightly.py");
+    });
+
     it("does not run the identifier check when nothing was retrieved", async () => {
         mentor.answer.mockResolvedValue({ answer: "Nothing is documented.", chunks: [], projectSlug: undefined });
 

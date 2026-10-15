@@ -124,10 +124,23 @@ export class S3Service {
      * holds alongside the content. The trailing slash is what keeps the two apart.
      */
     public async listObjects(subPrefix?: string): Promise<string[]> {
-        const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
         const { bucket, prefix, region } = await this.config.getS3Config();
+        return this.listKeys(bucket, region, subPrefix ? this.resolveKey(subPrefix, prefix) : prefix);
+    }
+
+    /**
+     * Lists object keys under the state prefix, the counterpart of getStateObject. Full keys, as
+     * listObjects returns them: the caller knows which prefix it asked under.
+     */
+    public async listStateObjects(subPrefix?: string): Promise<string[]> {
+        const { bucket, statePrefix, region } = await this.config.getS3Config();
+        return this.listKeys(bucket, region, subPrefix ? this.resolveKey(subPrefix, statePrefix) : statePrefix);
+    }
+
+    private async listKeys(bucket: string, region: string, rawPrefix?: string): Promise<string[]> {
+        const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
         const client = await this.getClient(region);
-        const effectivePrefix = S3Service.asFolderPrefix(subPrefix ? this.resolveKey(subPrefix, prefix) : prefix);
+        const effectivePrefix = S3Service.asFolderPrefix(rawPrefix);
 
         try {
             const keys: string[] = [];
