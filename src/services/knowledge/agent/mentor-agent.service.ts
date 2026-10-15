@@ -26,6 +26,14 @@ const TEMPERATURE = 0.3;
  */
 export const MAX_TOOL_ROUNDS = 10;
 
+/**
+ * The ceiling once the agent has declared, through begin_change_plan, that it is planning a
+ * change. A plan is locate, trace the uses, read the files, check the tests and the documents,
+ * then write — more rounds than any explanation needs, and worth them, because a plan that
+ * stopped tracing early is one that misses what the change breaks.
+ */
+export const MAX_PLAN_TOOL_ROUNDS = 16;
+
 /** A model exposing LangChain's tool binding. SelfHostedChatModel is a bare `invoke`, and some
  *  Ollama builds are served by backends without tool support, so it is detected, not assumed. */
 interface ToolCapableModel {
@@ -47,6 +55,8 @@ export interface MentorAnswer {
      * a directory listing, a document it read whole. The identifier guard counts them as support.
      */
     knownIdentifiers: string[];
+    /** The change the agent declared it was planning, when the question asked for one. */
+    planGoal?: string;
 }
 
 /**
@@ -91,7 +101,8 @@ export class MentorAgentService {
             carriedTurns: params.carriedTurns,
         });
 
-        for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+        // Re-read each round: begin_change_plan, called mid-loop, widens the budget from then on.
+        for (let round = 0; round < (executor.changePlan ? MAX_PLAN_TOOL_ROUNDS : MAX_TOOL_ROUNDS); round += 1) {
             const response = await bound.invoke(messages);
             const calls = this.toolCallsOf(response);
 
@@ -121,7 +132,9 @@ export class MentorAgentService {
 
         // Out of rounds, or nothing written. Ask once for the answer with no tools attached, so
         // the model has to write from what it already gathered rather than search again.
-        logger.debug(`Tool loop did not settle in ${MAX_TOOL_ROUNDS} round(s) — asking for a final answer.`);
+        logger.debug(
+            `Tool loop did not settle in ${executor.changePlan ? MAX_PLAN_TOOL_ROUNDS : MAX_TOOL_ROUNDS} round(s) — asking for a final answer.`,
+        );
         const forced = await this.llm.prompt(
             [
                 ...messages,
@@ -170,6 +183,7 @@ export class MentorAgentService {
             chunks: executor.chunks,
             projectSlug: await this.dominantProject(executor.chunks),
             knownIdentifiers: executor.knownIdentifiers,
+            planGoal: executor.changePlan?.goal,
         };
     }
 

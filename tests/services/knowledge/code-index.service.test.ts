@@ -100,4 +100,105 @@ describe("CodeIndexService", () => {
 
         await expect(service.load("orion", "orion-core")).resolves.toBeUndefined();
     });
+
+    describe("symbol index", () => {
+        const symbols = {
+            version: 1,
+            commit: state.commit,
+            symbols: [
+                {
+                    name: "run",
+                    kind: "function",
+                    path: "jobs/nightly.py",
+                    line: 12,
+                    endLine: 30,
+                    signature: "def run(day)",
+                },
+                { name: "Scheduler", kind: "class", path: "jobs/scheduler.py", line: 5, endLine: 90 },
+                { name: "run", kind: "method", path: "jobs/scheduler.py", line: 40, endLine: 60, parent: "Scheduler" },
+                { name: "run_all", kind: "function", path: "jobs/utils/io.py", line: 3 },
+                { name: "JOBS_TABLE", kind: "constant", path: "jobs/nightly.py", line: 4 },
+            ],
+            references: [
+                { name: "run", path: "jobs/scheduler.py", lines: [44, 51] },
+                { name: "run", path: "tests/test_nightly.py", lines: [7] },
+                { name: "JOBS_TABLE", path: "jobs/scheduler.py", lines: [12] },
+            ],
+            imports: [
+                { path: "jobs/scheduler.py", modules: ["jobs.nightly", "os"] },
+                { path: "tests/test_nightly.py", modules: ["../jobs/nightly"] },
+            ],
+        };
+
+        beforeEach(() => {
+            s3.getStateObject.mockImplementation(async (key: string) =>
+                Buffer.from(JSON.stringify(key.endsWith(".symbols.json") ? symbols : state)),
+            );
+            registry.load = jest.fn().mockResolvedValue({ projects: [{ slug: "orion", repos: [registered] }] });
+        });
+
+        it("reads the symbols file beside the state file, once", async () => {
+            await service.loadSymbols("orion", "orion-core");
+            await service.loadSymbols("orion", "orion-core");
+
+            expect(s3.getStateObject).toHaveBeenCalledWith("code-index/orion/orion-core.symbols.json");
+            expect(s3.getStateObject).toHaveBeenCalledTimes(1);
+        });
+
+        it("ranks an exact name first, then other cases, then partial matches", async () => {
+            const lookup = await service.findSymbols("run", { project: "orion" });
+
+            expect(lookup.matches.map((m) => `${m.kind} ${m.name}@${m.path}`)).toEqual([
+                "function run@jobs/nightly.py",
+                "method run@jobs/scheduler.py",
+                "function run_all@jobs/utils/io.py",
+            ]);
+            expect(lookup.matches[0]).toMatchObject({ repo: "acme/orion-core", projectSlug: "orion" });
+            expect(lookup.searched).toEqual(["acme/orion-core"]);
+        });
+
+        it("prefers the method of the named class for a dotted name", async () => {
+            const lookup = await service.findSymbols("Scheduler.run", { project: "orion" });
+
+            expect(lookup.matches[0]).toMatchObject({ kind: "method", parent: "Scheduler", path: "jobs/scheduler.py" });
+        });
+
+        it("searches every project when none is given, and reports repositories without an index", async () => {
+            s3.getStateObject.mockImplementation(async (key: string) => {
+                if (key.endsWith(".symbols.json")) throw new Error("NoSuchKey");
+                return Buffer.from(JSON.stringify(state));
+            });
+
+            const lookup = await service.findSymbols("run");
+
+            expect(registry.load).toHaveBeenCalled();
+            expect(lookup.matches).toEqual([]);
+            expect(lookup.unindexed).toEqual(["acme/orion-core"]);
+        });
+
+        it("finds references by exact name, with the definitions and the importers of the module", async () => {
+            const lookup = await service.findReferences("nightly.run", { project: "orion", repo: "orion-core" });
+
+            expect(lookup.definitions.map((d) => `${d.kind}@${d.path}`)).toEqual([
+                "function@jobs/nightly.py",
+                "method@jobs/scheduler.py",
+            ]);
+            expect(lookup.references).toEqual([
+                { projectSlug: "orion", repo: "acme/orion-core", path: "jobs/scheduler.py", lines: [44, 51] },
+                { projectSlug: "orion", repo: "acme/orion-core", path: "tests/test_nightly.py", lines: [7] },
+            ]);
+            // "jobs.nightly" and "../jobs/nightly" both name the module `nightly`; `run` is not a module.
+            expect(lookup.importers).toEqual([]);
+            expect(lookup.totalFiles).toBe(2);
+        });
+
+        it("finds the files that import a module by its last segment, however the path is written", async () => {
+            const lookup = await service.findReferences("jobs/nightly.py", { project: "orion" });
+
+            expect(lookup.importers.map((hit) => `${hit.path} (${hit.module})`)).toEqual([
+                "jobs/scheduler.py (jobs.nightly)",
+                "tests/test_nightly.py (../jobs/nightly)",
+            ]);
+        });
+    });
 });

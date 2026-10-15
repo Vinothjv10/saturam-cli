@@ -132,6 +132,7 @@ export class AnswerFlowService {
                 digest: session.digest,
                 projectDisplayName: project?.displayName,
                 projectSlug: project?.slug,
+                planGoal: produced.planGoal,
             }),
             this.writer.summarize(question, answer),
         ]);
@@ -140,6 +141,7 @@ export class AnswerFlowService {
             store,
             ref,
             session,
+            planGoal: produced.planGoal,
             turn: {
                 index: nextTurnIndex(session),
                 question,
@@ -305,6 +307,8 @@ export class AnswerFlowService {
         ref: SessionRef;
         session: ChatSession;
         turn: ChatTurn;
+        /** The change the agent declared it was planning; becomes the learner's goal for the conversation. */
+        planGoal?: string;
     }): Promise<void> {
         const { store, ref, session, turn } = params;
         await store.appendTurn(ref, turn);
@@ -312,6 +316,15 @@ export class AnswerFlowService {
         if (turn.resolvedProject && turn.resolvedProject !== session.activeProject) {
             await store.saveActiveProject(ref, turn.resolvedProject);
             session.activeProject = turn.resolvedProject;
+        }
+
+        // A declared change is the clearest statement of what the learner is here to do, so it
+        // takes the goal slot the digest carries forward — into later turns and later sessions.
+        if (params.planGoal && params.planGoal !== session.digest?.learnerGoal) {
+            const digest: SessionDigest = { ...(session.digest ?? emptyDigest()), learnerGoal: params.planGoal };
+            await store.saveDigest(ref, digest);
+            session.digest = digest;
+            logger.debug(`Learner goal from the change plan: ${params.planGoal}`);
         }
 
         const updated: ChatSession = { ...session, turns: [...session.turns, turn] };

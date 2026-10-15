@@ -79,18 +79,149 @@ describe("KnowledgeToolExecutor", () => {
                 files: ["nightly.py"],
                 omitted: 0,
             }),
+            findSymbols: jest.fn().mockResolvedValue({
+                matches: [
+                    {
+                        name: "run",
+                        kind: "function",
+                        path: "jobs/nightly.py",
+                        line: 12,
+                        endLine: 30,
+                        signature: "def run(day: date) -> int",
+                        doc: "Builds the daily table.",
+                        projectSlug: "orion",
+                        repo: "acme/orion-core",
+                    },
+                ],
+                total: 1,
+                searched: ["acme/orion-core"],
+                unindexed: [],
+            }),
+            findReferences: jest.fn().mockResolvedValue({
+                definitions: [
+                    {
+                        name: "run",
+                        kind: "function",
+                        path: "jobs/nightly.py",
+                        line: 12,
+                        projectSlug: "orion",
+                        repo: "acme/orion-core",
+                    },
+                ],
+                references: [
+                    { projectSlug: "orion", repo: "acme/orion-core", path: "jobs/scheduler.py", lines: [40, 88] },
+                    { projectSlug: "orion", repo: "acme/orion-core", path: "tests/test_nightly.py", lines: [7] },
+                ],
+                importers: [
+                    {
+                        projectSlug: "orion",
+                        repo: "acme/orion-core",
+                        path: "jobs/scheduler.py",
+                        module: "jobs.nightly",
+                    },
+                ],
+                totalFiles: 2,
+                searched: ["acme/orion-core"],
+                unindexed: [],
+            }),
         };
         executor = new KnowledgeToolExecutor(knowledgeBase, registry, reader, codeIndex, []);
     });
 
-    it("offers search, read, browse, list and recall", () => {
+    it("offers search, read, browse, the symbol lookups, the plan declaration, list and recall", () => {
         expect(KNOWLEDGE_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
             "search_documentation",
             "read_document",
             "browse_repository",
+            "find_symbol",
+            "find_references",
+            "begin_change_plan",
             "list_projects",
             "recall_conversation",
         ]);
+    });
+
+    describe("find_symbol", () => {
+        it("renders each definition with its place, signature and docstring, and records the names", async () => {
+            const reply = await run("find_symbol", { name: "run", project: "orion" });
+
+            expect(codeIndex.findSymbols).toHaveBeenCalledWith("run", { project: "orion", repo: undefined });
+            expect(reply).toContain('1 definition(s) for "run" (searched acme/orion-core)');
+            expect(reply).toContain(
+                "- function run: acme/orion-core:jobs/nightly.py lines 12-30 — def run(day: date) -> int",
+            );
+            expect(reply).toContain("Builds the daily table.");
+            expect(executor.knownIdentifiers).toEqual(expect.arrayContaining(["run", "jobs/nightly.py"]));
+        });
+
+        it("says which repositories have no symbol index yet, so a miss is not read as absence", async () => {
+            codeIndex.findSymbols.mockResolvedValue({
+                matches: [],
+                total: 0,
+                searched: [],
+                unindexed: ["acme/orion-core"],
+            });
+
+            const reply = await run("find_symbol", { name: "nowhere" });
+
+            expect(reply).toContain('No definition called "nowhere"');
+            expect(reply).toContain("no symbol index yet for acme/orion-core");
+        });
+
+        it("requires a name", async () => {
+            expect(await run("find_symbol", {})).toContain("`name` argument is required");
+        });
+    });
+
+    describe("find_references", () => {
+        it("lists the definitions, the using files with lines, and the importers", async () => {
+            const reply = await run("find_references", { name: "run" });
+
+            expect(reply).toContain("Defined in:");
+            expect(reply).toContain("Used in 2 file(s):");
+            expect(reply).toContain("- acme/orion-core:jobs/scheduler.py line(s) 40, 88");
+            expect(reply).toContain("- acme/orion-core:tests/test_nightly.py line(s) 7");
+            expect(reply).toContain("Imported as a module by:\n- acme/orion-core:jobs/scheduler.py (jobs.nightly)");
+            expect(executor.knownIdentifiers).toEqual(
+                expect.arrayContaining(["jobs/scheduler.py", "tests/test_nightly.py"]),
+            );
+        });
+
+        it("says so plainly when nothing defines, uses or imports the name", async () => {
+            codeIndex.findReferences.mockResolvedValue({
+                definitions: [],
+                references: [],
+                importers: [],
+                totalFiles: 0,
+                searched: ["acme/orion-core"],
+                unindexed: [],
+            });
+
+            expect(await run("find_references", { name: "ghost" })).toContain(
+                'Nothing in the indexed code defines, uses or imports "ghost"',
+            );
+        });
+    });
+
+    describe("begin_change_plan", () => {
+        it("records the goal and returns the checklist to work through", async () => {
+            const reply = await run("begin_change_plan", {
+                goal: "move the nightly job to 03:00",
+                constraints: "no downtime",
+            });
+
+            expect(executor.changePlan).toEqual({ goal: "move the nightly job to 03:00", constraints: "no downtime" });
+            expect(reply).toContain("Plan recorded: move the nightly job to 03:00 Constraints: no downtime");
+            expect(reply).toContain("1. Locate");
+            expect(reply).toContain("find_references for every use");
+            expect(reply).toContain("change-impact map or a making-changes recipe");
+            expect(reply).toContain("Write the plan as numbered steps");
+        });
+
+        it("requires a goal and records nothing without one", async () => {
+            expect(await run("begin_change_plan", {})).toContain("`goal` argument is required");
+            expect(executor.changePlan).toBeUndefined();
+        });
     });
 
     describe("search_documentation", () => {

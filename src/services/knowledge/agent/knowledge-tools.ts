@@ -6,7 +6,7 @@ import {
     RetrievedChunk,
 } from "../../../integrations/aws/services/bedrock-knowledge-base.service";
 import { ChatTurn } from "../chat-session.model";
-import { CodeIndexService, RepoIndex } from "../code-index.service";
+import { CodeIndexService, RepoIndex, SymbolMatch } from "../code-index.service";
 import { DocumentReaderService } from "../document-reader.service";
 import { CODE_CATEGORY, DOCUMENT_KINDS, isDocumentKind, retrievalFiltersFor } from "../knowledge-source.model";
 import { ProjectRegistryService, RegistryProject, RegistryRepo, repoFullName } from "../project-registry.service";
@@ -34,7 +34,8 @@ export const MAX_READS_PER_QUESTION = 6;
  * The corpus holds two kinds of material since source code was indexed beside the documents:
  * prose that explains, and code that runs. Search covers both and can be narrowed to either;
  * reading and browsing exist because a search result is a slice, and a slice of code is rarely
- * enough to explain what the code does.
+ * enough to explain what the code does. The symbol tools exist because a change is planned
+ * against definitions and their uses, which retrieval by similarity cannot enumerate.
  */
 export const KNOWLEDGE_TOOL_DEFINITIONS = [
     {
@@ -108,6 +109,51 @@ export const KNOWLEDGE_TOOL_DEFINITIONS = [
         }),
     },
     {
+        name: "find_symbol",
+        description:
+            "Look up where a function, class, method, constant, table or resource is defined in the indexed " +
+            "source code, by name. Returns each definition's repository, path, line range, signature and " +
+            "docstring. Use it when a search result mentions a name and you need its definition, when the " +
+            "user names a function or class, or when planning a change to something specific. `Class.method` " +
+            "finds a method of that class. Pass `project` to narrow to one project and `repo` to one repository.",
+        schema: z.object({
+            name: z.string().describe("The name as written in code, such as build_report or Scheduler.run."),
+            project: z.string().optional().describe("Project slug to search within. Omit for every indexed project."),
+            repo: z.string().optional().describe("Repository, as workspace/repo-slug or its slug."),
+        }),
+    },
+    {
+        name: "find_references",
+        description:
+            "Find every indexed file that uses a name — calls it, imports it or refers to it — along with its " +
+            "definitions and the files that import a module of that name. The first thing to run when " +
+            "planning a change to something: it shows what the change touches. Returns files with line " +
+            "numbers; read the ones that matter with read_document. Exact name only.",
+        schema: z.object({
+            name: z
+                .string()
+                .describe("The name as written in code: a function, class, constant, table or module name."),
+            project: z.string().optional().describe("Project slug to search within. Omit for every indexed project."),
+            repo: z.string().optional().describe("Repository, as workspace/repo-slug or its slug."),
+        }),
+    },
+    {
+        name: "begin_change_plan",
+        description:
+            "Call this first when the question asks how to change, add, move, remove or migrate something — " +
+            "a schedule, a field, a job, a screen, an integration, a configuration — rather than how it works. " +
+            "Pass the goal as you understand it and any constraints the user gave. It records the goal for " +
+            "the conversation, gives you room for the extra searches and reads a plan needs, and returns the " +
+            "checklist to work through before you write the plan.",
+        schema: z.object({
+            goal: z.string().describe("The change, in one sentence, as the user would state it."),
+            constraints: z
+                .string()
+                .optional()
+                .describe("Anything the user said must hold: a deadline, what must not change, who must approve."),
+        }),
+    },
+    {
         name: "list_projects",
         description:
             "List the projects that are indexed, with their slugs, document counts, repositories and summaries. " +
@@ -126,6 +172,30 @@ export const KNOWLEDGE_TOOL_DEFINITIONS = [
 ] as const;
 
 export type ToolCall = { id: string; name: string; args: Record<string, unknown> };
+
+/** What begin_change_plan recorded: the goal of the change being planned, and what must hold. */
+export interface ChangePlan {
+    goal: string;
+    constraints?: string;
+}
+
+/**
+ * The checklist begin_change_plan hands back. It is returned as a tool result rather than written
+ * into the system prompt so it arrives at the moment the agent has decided a change is being
+ * planned, as the next thing to read, instead of as one more paragraph among the general rules.
+ */
+export function changePlanChecklist(plan: ChangePlan): string {
+    return [
+        `Plan recorded: ${plan.goal}${plan.constraints ? ` Constraints: ${plan.constraints}` : ""}`,
+        "You now have room for the extra searches and reads a plan needs. Work through this before you write:",
+        "1. Locate — where the thing is defined, configured and consumed. Search the code with the exact identifiers, find_symbol for the definitions, find_references for every use, and read_document around the hits.",
+        "2. Trace the impact — the tests that cover it, the documents that describe it, the jobs that run it, the data it produces, the configuration that points at it. If the project's documentation has a change-impact map or a making-changes recipe, read it first and follow it.",
+        "3. Order the steps so each is verifiable on its own, naming the exact file, key or table for each.",
+        "4. Say how to verify, what can go wrong, how to undo it, and who to involve, from the owners the documents name.",
+        "5. List what you could not find as open questions, in your own voice, with who could answer each.",
+        "Write the plan as numbered steps, with the impact list above them and verification below. Ask the user a question only when a missing constraint changes the plan; otherwise state your assumption and go on.",
+    ].join("\n");
+}
 
 function stringArg(args: Record<string, unknown>, name: string): string | undefined {
     const value = args[name];
@@ -156,6 +226,7 @@ export class KnowledgeToolExecutor {
     private readonly known = new Set<string>();
     private searches = 0;
     private reads = 0;
+    private plan: ChangePlan | undefined;
 
     constructor(
         private readonly knowledgeBase: BedrockKnowledgeBaseService,
@@ -178,9 +249,14 @@ export class KnowledgeToolExecutor {
         return this.reads;
     }
 
-    /** Names established by a listing, a read, or a result's metadata, rather than by a passage's text. */
+    /** Names established by a listing, a read, a lookup, or a result's metadata, rather than by a passage's text. */
     public get knownIdentifiers(): string[] {
         return [...this.known];
+    }
+
+    /** Set once the agent declared it is planning a change; the loop widens its budget on it. */
+    public get changePlan(): ChangePlan | undefined {
+        return this.plan;
     }
 
     public async run(call: ToolCall): Promise<string> {
@@ -191,6 +267,12 @@ export class KnowledgeToolExecutor {
                 return this.readDocument(call.args);
             case "browse_repository":
                 return this.browse(call.args);
+            case "find_symbol":
+                return this.findSymbol(call.args);
+            case "find_references":
+                return this.findReferences(call.args);
+            case "begin_change_plan":
+                return this.beginChangePlan(call.args);
             case "list_projects":
                 return this.listProjects();
             case "recall_conversation":
@@ -370,6 +452,116 @@ export class KnowledgeToolExecutor {
             return `- ${repoFullName(repo)}${branch}${count}${incomplete}`;
         });
         return `Repositories indexed for project "${project}":\n${lines.join("\n")}\nCall browse_repository again with \`repo\` to list one.`;
+    }
+
+    private async findSymbol(args: Record<string, unknown>): Promise<string> {
+        const name = stringArg(args, "name");
+        if (!name)
+            return "The `name` argument is required: a function, class, method, constant, table or resource name.";
+        const scope = { project: stringArg(args, "project"), repo: stringArg(args, "repo") };
+
+        let lookup;
+        try {
+            lookup = await this.codeIndex.findSymbols(name, scope);
+        } catch (err) {
+            logger.debug(`find_symbol(${name}) failed: ${(err as Error).message}`);
+            return `Could not read the symbol index: ${(err as Error).message}`;
+        }
+
+        const coverage = this.describeCoverage(lookup.searched, lookup.unindexed);
+        if (lookup.matches.length === 0) {
+            return `No definition called "${name}" in the indexed code${coverage}. Check the spelling against a search result, or search the code for the name instead.`;
+        }
+
+        for (const match of lookup.matches) {
+            this.known.add(match.name);
+            this.known.add(match.path);
+            if (match.parent) this.known.add(`${match.parent}.${match.name}`);
+        }
+        logger.debug(`find_symbol(${name}) → ${lookup.matches.length} of ${lookup.total}`);
+
+        const lines = lookup.matches.map((match) => this.renderSymbol(match));
+        const more =
+            lookup.total > lookup.matches.length
+                ? `\n… ${lookup.total - lookup.matches.length} more; narrow with \`repo\`, or a longer name.`
+                : "";
+        return `${lookup.matches.length} definition(s) for "${name}"${coverage}:\n${lines.join("\n")}${more}\nRead one with read_document("<repo>:<path>", startLine, endLine).`;
+    }
+
+    private renderSymbol(match: SymbolMatch): string {
+        const range =
+            match.endLine && match.endLine !== match.line ? `${match.line}-${match.endLine}` : `${match.line}`;
+        const owner = match.parent ? ` in ${match.parent}` : "";
+        const signature = match.signature ? ` — ${match.signature}` : "";
+        const doc = match.doc ? `\n    ${match.doc.split("\n")[0].slice(0, 160)}` : "";
+        return `- ${match.kind} ${match.name}${owner}: ${match.repo}:${match.path} lines ${range}${signature}${doc}`;
+    }
+
+    private async findReferences(args: Record<string, unknown>): Promise<string> {
+        const name = stringArg(args, "name");
+        if (!name) return "The `name` argument is required: the exact name as written in code.";
+        const scope = { project: stringArg(args, "project"), repo: stringArg(args, "repo") };
+
+        let lookup;
+        try {
+            lookup = await this.codeIndex.findReferences(name, scope);
+        } catch (err) {
+            logger.debug(`find_references(${name}) failed: ${(err as Error).message}`);
+            return `Could not read the symbol index: ${(err as Error).message}`;
+        }
+
+        const coverage = this.describeCoverage(lookup.searched, lookup.unindexed);
+        if (lookup.definitions.length === 0 && lookup.references.length === 0 && lookup.importers.length === 0) {
+            return `Nothing in the indexed code defines, uses or imports "${name}"${coverage}. The index tracks names defined in the repositories; for a table or a setting named only in strings, search the code for it instead.`;
+        }
+
+        for (const definition of lookup.definitions) {
+            this.known.add(definition.name);
+            this.known.add(definition.path);
+        }
+        for (const hit of [...lookup.references, ...lookup.importers]) this.known.add(hit.path);
+        logger.debug(
+            `find_references(${name}) → ${lookup.definitions.length} definition(s), ${lookup.totalFiles} file(s), ${lookup.importers.length} importer(s)`,
+        );
+
+        const sections: string[] = [`References to "${name}"${coverage}:`];
+        if (lookup.definitions.length > 0) {
+            sections.push(`Defined in:\n${lookup.definitions.map((match) => this.renderSymbol(match)).join("\n")}`);
+        }
+        if (lookup.references.length > 0) {
+            const files = lookup.references.map(
+                (hit) =>
+                    `- ${hit.repo}:${hit.path} line(s) ${hit.lines.slice(0, 12).join(", ")}${hit.lines.length > 12 ? ", …" : ""}`,
+            );
+            const more =
+                lookup.totalFiles > lookup.references.length
+                    ? `\n… ${lookup.totalFiles - lookup.references.length} more file(s); narrow with \`repo\`.`
+                    : "";
+            sections.push(`Used in ${lookup.totalFiles} file(s):\n${files.join("\n")}${more}`);
+        }
+        if (lookup.importers.length > 0) {
+            sections.push(
+                `Imported as a module by:\n${lookup.importers.map((hit) => `- ${hit.repo}:${hit.path} (${hit.module})`).join("\n")}`,
+            );
+        }
+        sections.push("Read the ones that matter with read_document before describing what the change touches.");
+        return sections.join("\n");
+    }
+
+    private describeCoverage(searched: string[], unindexed: string[]): string {
+        if (searched.length === 0 && unindexed.length === 0) return " (no repositories are indexed)";
+        const parts: string[] = [];
+        if (searched.length > 0) parts.push(`searched ${searched.join(", ")}`);
+        if (unindexed.length > 0) parts.push(`no symbol index yet for ${unindexed.join(", ")}`);
+        return ` (${parts.join("; ")})`;
+    }
+
+    private beginChangePlan(args: Record<string, unknown>): string {
+        const goal = stringArg(args, "goal");
+        if (!goal) return "The `goal` argument is required: the change, in one sentence.";
+        this.plan = { goal, constraints: stringArg(args, "constraints") };
+        logger.debug(`begin_change_plan: ${goal}`);
+        return changePlanChecklist(this.plan);
     }
 
     private async listProjects(): Promise<string> {

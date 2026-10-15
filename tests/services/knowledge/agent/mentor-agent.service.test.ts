@@ -1,5 +1,9 @@
 import { AIMessage } from "@langchain/core/messages";
-import { MAX_TOOL_ROUNDS, MentorAgentService } from "../../../../src/services/knowledge/agent/mentor-agent.service";
+import {
+    MAX_PLAN_TOOL_ROUNDS,
+    MAX_TOOL_ROUNDS,
+    MentorAgentService,
+} from "../../../../src/services/knowledge/agent/mentor-agent.service";
 import { KnowledgeToolFactory } from "../../../../src/services/knowledge/agent/knowledge-tools";
 
 const project = { slug: "orion", displayName: "Orion", aliases: [], sources: [] };
@@ -183,6 +187,28 @@ describe("MentorAgentService", () => {
         expect(result.answer).toBe("forced answer");
         expect(llm.prompt).toHaveBeenCalled();
         expect(bound.invoke).toHaveBeenCalledTimes(MAX_TOOL_ROUNDS);
+    });
+
+    it("widens the round budget once the agent declares it is planning a change, and reports the goal", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("begin_change_plan", { goal: "move the nightly job to 03:00" }))
+            .mockResolvedValue(withToolCall("search_documentation", { query: "again" }));
+
+        const result = await ask("how do I move the nightly job to 03:00?");
+
+        // The same message array is handed to every round, so look for the checklist anywhere in it.
+        const messages = bound.invoke.mock.calls[1][0] as Array<{ content: unknown }>;
+        expect(messages.some((m) => String(m.content).includes("Plan recorded: move the nightly job"))).toBe(true);
+        expect(bound.invoke).toHaveBeenCalledTimes(MAX_PLAN_TOOL_ROUNDS);
+        expect(result.planGoal).toBe("move the nightly job to 03:00");
+    });
+
+    it("leaves the goal unset for a question that was not a change", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("search_documentation", { query: "scheduler" }))
+            .mockResolvedValueOnce(new AIMessage({ content: "It reads a jobs table." }));
+
+        expect((await ask()).planGoal).toBeUndefined();
     });
 
     it("de-duplicates chunks seen by more than one search", async () => {

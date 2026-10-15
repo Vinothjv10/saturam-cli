@@ -36,6 +36,32 @@ describe("mentor agent prompt", () => {
         });
     });
 
+    describe("planning a change", () => {
+        it("has the agent declare the plan first, then locate, trace and only then write", () => {
+            const text = systemTextOf();
+            expect(text).toContain("call begin_change_plan first");
+            expect(text).toContain("find_symbol for where it is defined, find_references for everything that uses it");
+            expect(text).toContain("change-impact map or making-changes recipe first");
+        });
+
+        it("asks for the one shape a plan needs: numbered, verifiable steps with impact and verification", () => {
+            const text = systemTextOf();
+            expect(text).toContain("The plan is numbered steps");
+            expect(text).toContain("a plan without steps is not a plan");
+            expect(text).toContain("open questions in your own voice");
+        });
+
+        it("plans something new from the footprint of the nearest existing thing", () => {
+            expect(systemTextOf()).toContain(
+                "find the nearest existing thing of the same kind and plan from its footprint",
+            );
+        });
+
+        it("says none of this when the provider cannot call tools", () => {
+            expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("begin_change_plan");
+        });
+    });
+
     describe("code beside documentation", () => {
         it("tells the agent the corpus holds both, and to search them apart when the question is about one", () => {
             const text = systemTextOf();

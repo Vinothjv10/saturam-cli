@@ -156,6 +156,24 @@ describe("AnswerFlowService", () => {
         expect(writer.revise).not.toHaveBeenCalled();
     });
 
+    it("keeps a declared change plan as the learner's goal and hands it to the follow-ups", async () => {
+        mentor.answer.mockResolvedValue({
+            answer: "1. Edit the schedule. 2. Restart the scheduler.",
+            chunks: [{ content: "the schedule lives in the scheduler", location: "s3://docs/a.md" }],
+            projectSlug: undefined,
+            knownIdentifiers: [],
+            planGoal: "move the nightly job to 03:00",
+        });
+
+        await flow.ask("how do I move the nightly job to 03:00?");
+
+        expect(followUps.suggest).toHaveBeenCalledWith(
+            expect.objectContaining({ planGoal: "move the nightly job to 03:00" }),
+        );
+        const [sessionId] = await store.findRecentSessionIds(getOwnerId(), 1);
+        expect((await store.load(ref(sessionId))).digest?.learnerGoal).toBe("move the nightly job to 03:00");
+    });
+
     it("leaves the project unset when the evidence does not agree on one", async () => {
         mentor.answer.mockResolvedValue({ answer: "Both use it.", chunks: [], projectSlug: undefined });
 
