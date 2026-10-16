@@ -37,6 +37,21 @@ describe("mentor agent prompt", () => {
     });
 
     describe("planning a change", () => {
+        it("treats 'show me how to change it' as a plan question, and changes one mechanism only", () => {
+            const text = systemTextOf();
+            expect(text).toContain('"show me how to change it"');
+            expect(text).toContain("do not also give it a schedule of its own");
+            expect(text).toContain("A change goes to the mechanism that does the thing today, and only that one.");
+            expect(text).toContain("what must run before it and what runs after it");
+            expect(text).toContain("stays consistent with what this conversation already established");
+        });
+
+        it("tells the agent that tool results are private, so what is asked for must be shown", () => {
+            const text = systemTextOf();
+            expect(text).toContain("What a tool returns is visible only to you");
+            expect(text).toContain('never refer to a tool result as "above"');
+        });
+
         it("has the agent declare the plan first, then locate, trace and only then write", () => {
             const text = systemTextOf();
             expect(text).toContain("call begin_change_plan first");

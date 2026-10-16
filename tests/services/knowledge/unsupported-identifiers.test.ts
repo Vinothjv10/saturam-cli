@@ -37,6 +37,17 @@ Snapshots land in /home/ubuntu/mrf/pkl/. The kpi APIs read them. Port 8080 serve
             expect(extractIdentifiers("Airflow 1.10.8 at https://example.com/docs/x.md")).toEqual([]);
         });
 
+        it("does not read a method call as a file, even when the sources use that method too", () => {
+            const code =
+                'change `schedule.every().sunday.at("01:30").do(cons_dag)` to friday.at("01:30") in the daemon';
+            const flagged = findUnsupportedIdentifiers(
+                code,
+                'the daemon runs schedule.every().sunday.at("01:30") each week',
+            );
+
+            expect(flagged).toEqual([]);
+        });
+
         it("strips surrounding punctuation from a path at the end of a sentence", () => {
             expect(extractIdentifiers("Look in kpi/config.py.")).toEqual(["kpi/config.py"]);
         });
