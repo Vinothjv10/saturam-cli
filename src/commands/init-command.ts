@@ -531,10 +531,21 @@ export class InitCommand implements TypedCommand<typeof INPUTS> {
                 default: existing?.bedrockKnowledgeBase?.region ?? "",
             });
 
+            const searchType = await select<"DEFAULT" | "HYBRID" | "SEMANTIC">({
+                message: "Retrieval search type:",
+                choices: [
+                    { name: "Knowledge base default", value: "DEFAULT" },
+                    { name: "HYBRID (adds keyword matching, which code identifiers need)", value: "HYBRID" },
+                    { name: "SEMANTIC", value: "SEMANTIC" },
+                ],
+                default: existing?.bedrockKnowledgeBase?.searchType ?? "DEFAULT",
+            });
+
             bedrockKnowledgeBase = {
                 knowledgeBaseId,
                 dataSourceId: dataSourceId.trim() || undefined,
                 region: kbRegion.trim() || undefined,
+                searchType: searchType === "DEFAULT" ? undefined : searchType,
             };
         }
 

@@ -1,3 +1,4 @@
+import { S3ObjectError } from "../../../src/integrations/aws/services/s3.service";
 import { DocumentReaderService, MAX_READ_CHARS } from "../../../src/services/knowledge/document-reader.service";
 
 /** A source file as the pipeline writes it: header table, "## Source", the file in a fence. */
@@ -182,6 +183,84 @@ describe("DocumentReaderService", () => {
             await expect(reader.read("orion/google-docs/missing.md")).rejects.toThrow(
                 'There is no document at "orion/google-docs/missing.md"',
             );
+        });
+
+        it("treats AccessDenied like a missing key, since S3 answers 403 when ListBucket is not granted", async () => {
+            const denied = new Error("Failed to get s3://kb-bucket/onboarding/orion/google-docs/x.md: AccessDenied");
+            s3.getObject.mockRejectedValue(denied);
+
+            const failure = await reader.read("orion/google-docs/x.md").catch((err: Error) => err);
+
+            expect((failure as Error).message).toContain('There is no document at "orion/google-docs/x.md"');
+            expect((failure as Error).message).not.toContain("kb-bucket");
+            expect((failure as Error).message).not.toContain("AccessDenied");
+        });
+
+        it("recognises the SDK's own shape of a denied read, whose message never says AccessDenied", async () => {
+            s3.getObject.mockRejectedValue(
+                new S3ObjectError(
+                    "Failed to get s3://kb-bucket/onboarding/orion/google-docs/x.md: Access Denied",
+                    "AccessDenied",
+                    403,
+                ),
+            );
+
+            await expect(reader.read("orion/google-docs/x.md")).rejects.toThrow(
+                'There is no document at "orion/google-docs/x.md"',
+            );
+        });
+
+        it("recognises the SDK's own shape of a missing key", async () => {
+            s3.getObject.mockRejectedValue(
+                new S3ObjectError(
+                    "Failed to get s3://kb-bucket/onboarding/orion/google-docs/x.md: The specified key does not exist.",
+                    "NoSuchKey",
+                    404,
+                ),
+            );
+
+            await expect(reader.read("orion/google-docs/x.md")).rejects.toThrow(
+                'There is no document at "orion/google-docs/x.md"',
+            );
+        });
+
+        it("retries <path>.md.md for a Markdown source file when the first key is denied", async () => {
+            s3.getObject.mockImplementation(async (key: string) => {
+                if (key.endsWith(".md.md")) return Buffer.from(proseDocument);
+                throw new Error("Failed to get s3://kb-bucket/onboarding/x: AccessDenied");
+            });
+
+            const slice = await reader.read("acme/orion-core:docs/guide.md");
+
+            expect(s3.getObject).toHaveBeenCalledWith("orion/bitbucket/orion-core/docs/guide.md");
+            expect(s3.getObject).toHaveBeenCalledWith("orion/bitbucket/orion-core/docs/guide.md.md");
+            expect(slice.content).toContain("First line.");
+        });
+
+        it("keeps the bucket and key of an unexpected S3 failure out of what the agent is told", async () => {
+            s3.getObject.mockRejectedValue(new Error("Failed to get s3://kb-bucket/onboarding/k: SlowDown"));
+
+            const failure = await reader.read("orion/google-docs/x.md").catch((err: Error) => err);
+
+            expect((failure as Error).message).not.toContain("kb-bucket");
+            expect((failure as Error).message).toContain("could not be read");
+        });
+
+        it("numbers the lines of a source file whose name starts with an underscore", async () => {
+            s3.getObject.mockResolvedValue(Buffer.from(codeDocument));
+
+            const slice = await reader.read("acme/orion-core:pkg/__init__.py");
+
+            expect(slice.path).toBe("pkg/__init__.py");
+            expect(slice.content).toContain("Source lines 1");
+        });
+
+        it("still treats the pipeline's repository index document as prose", async () => {
+            s3.getObject.mockResolvedValue(Buffer.from(proseDocument));
+
+            const slice = await reader.read("acme/orion-core:_repository");
+
+            expect(slice.path).toBeUndefined();
         });
     });
 });

@@ -32,6 +32,14 @@ export const KNOWLEDGE_SOURCE_CATEGORIES: readonly string[] = Object.values(Know
  */
 export const CODE_CATEGORY: string = KnowledgeSourceType.BITBUCKET;
 
+/** The pipeline's own summary document of a repository, written beside its files (`_repository.md`). */
+export const REPOSITORY_INDEX_DOCUMENT = "_repository";
+
+/** True for the pipeline's repository index document; a file that merely starts with `_` (`__init__.py`) is not it. */
+export function isRepositoryIndexDocument(path: string): boolean {
+    return path.replace(/\.md$/, "") === REPOSITORY_INDEX_DOCUMENT;
+}
+
 /**
  * What a search is asked to cover. The corpus holds two kinds of material that answer different
  * questions — what a page explains, and what the code does — and a question is often clearly

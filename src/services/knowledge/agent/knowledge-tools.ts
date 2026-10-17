@@ -224,8 +224,11 @@ function metadataString(chunk: RetrievedChunk, field: string): string | undefine
 export class KnowledgeToolExecutor {
     private readonly seen = new Map<string, RetrievedChunk>();
     private readonly known = new Set<string>();
+    /** Text the agent was shown by a read or a lookup: what it quotes from there is as real as a passage. */
+    private readonly shownText: string[] = [];
     private searches = 0;
     private reads = 0;
+    private readonly readKeys = new Set<string>();
     private plan: ChangePlan | undefined;
 
     constructor(
@@ -249,9 +252,13 @@ export class KnowledgeToolExecutor {
         return this.reads;
     }
 
-    /** Names established by a listing, a read, a lookup, or a result's metadata, rather than by a passage's text. */
+    /**
+     * What the identifier guard may treat as seen besides the search chunks: names established by a
+     * listing, a lookup or a result's metadata, and the text of every document read and every
+     * definition printed, since what those mention is evidence too.
+     */
     public get knownIdentifiers(): string[] {
-        return [...this.known];
+        return [...this.known, ...this.shownText];
     }
 
     /** Set once the agent declared it is planning a change; the loop widens its budget on it. */
@@ -376,17 +383,23 @@ export class KnowledgeToolExecutor {
             return `The read budget for this question (${MAX_READS_PER_QUESTION} documents) is used up. Answer from what you have read, or search for a more specific passage.`;
         }
 
-        this.reads += 1;
+        const startLine = lineArg(args, "startLine");
         try {
-            const slice = await this.reader.read(reference, {
-                startLine: lineArg(args, "startLine"),
-                endLine: lineArg(args, "endLine"),
-            });
+            const slice = await this.reader.read(reference, { startLine, endLine: lineArg(args, "endLine") });
+            // Charged once the read succeeded, and not for the next part of a document already read:
+            // a wrong guess or a long file must not use up the budget the right files need.
+            const continuation = this.readKeys.has(slice.key) && startLine !== undefined && startLine > 1;
+            if (!continuation) this.reads += 1;
+            this.readKeys.add(slice.key);
             for (const identifier of slice.identifiers) this.known.add(identifier);
+            // What the file mentions (other paths, settings, scripts) is evidence too; without it a
+            // correct step that names them would be revised away as an invention.
+            this.shownText.push(slice.content);
             logger.debug(`read_document(${reference}) → ${slice.key}`);
             return slice.content;
         } catch (err) {
             logger.debug(`read_document(${reference}) failed: ${(err as Error).message}`);
+            // The reader's messages are written for the agent; nothing raw from S3 reaches it.
             return `Could not read "${reference}": ${(err as Error).message}`;
         }
     }
@@ -481,6 +494,7 @@ export class KnowledgeToolExecutor {
         logger.debug(`find_symbol(${name}) → ${lookup.matches.length} of ${lookup.total}`);
 
         const lines = lookup.matches.map((match) => this.renderSymbol(match));
+        this.shownText.push(...lines);
         const more =
             lookup.total > lookup.matches.length
                 ? `\n… ${lookup.total - lookup.matches.length} more; narrow with \`repo\`, or a longer name.`
@@ -526,7 +540,9 @@ export class KnowledgeToolExecutor {
 
         const sections: string[] = [`References to "${name}"${coverage}:`];
         if (lookup.definitions.length > 0) {
-            sections.push(`Defined in:\n${lookup.definitions.map((match) => this.renderSymbol(match)).join("\n")}`);
+            const defined = lookup.definitions.map((match) => this.renderSymbol(match));
+            this.shownText.push(...defined);
+            sections.push(`Defined in:\n${defined.join("\n")}`);
         }
         if (lookup.references.length > 0) {
             const files = lookup.references.map(
@@ -541,7 +557,7 @@ export class KnowledgeToolExecutor {
         }
         if (lookup.importers.length > 0) {
             sections.push(
-                `Imported as a module by:\n${lookup.importers.map((hit) => `- ${hit.repo}:${hit.path} (${hit.module})`).join("\n")}`,
+                `Imported as a module by (matched by module name only, so an unrelated module with the same name can appear):\n${lookup.importers.map((hit) => `- ${hit.repo}:${hit.path} (${hit.module})`).join("\n")}`,
             );
         }
         sections.push("Read the ones that matter with read_document before describing what the change touches.");

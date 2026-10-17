@@ -1,8 +1,8 @@
 import { getLogger } from "log4js";
 import { Service } from "typedi";
-import { S3Service } from "../../integrations/aws/services/s3.service";
+import { S3ObjectError, S3Service } from "../../integrations/aws/services/s3.service";
 import { ConfigService } from "../config-service";
-import { CODE_CATEGORY } from "./knowledge-source.model";
+import { CODE_CATEGORY, isRepositoryIndexDocument } from "./knowledge-source.model";
 import { ProjectRegistryService, repoFullName } from "./project-registry.service";
 
 const logger = getLogger("DocumentReader");
@@ -36,9 +36,17 @@ interface CodeDocument {
     sourceLines: string[];
 }
 
+/**
+ * Without s3:ListBucket, S3 answers a missing key with 403 AccessDenied rather than 404, so as not
+ * to reveal which keys exist. The agent cannot tell the two apart either, so both are "not there".
+ * The S3 service keeps the code and status on the error; the message is only a fallback for an
+ * error that came some other way.
+ */
 function isNotFound(err: unknown): boolean {
-    const message = (err as Error)?.message ?? "";
-    return /NoSuchKey|NotFound|not found|404/i.test(message);
+    const { code, statusCode, message = "" } = (err as Partial<S3ObjectError>) ?? {};
+    if (code && /^(NoSuchKey|NotFound|AccessDenied|Forbidden)$/.test(code)) return true;
+    if (statusCode === 404 || statusCode === 403) return true;
+    return /NoSuchKey|NotFound|not found|does not exist|404|Access ?Denied|Forbidden|403/i.test(message);
 }
 
 /**
@@ -181,7 +189,10 @@ export class DocumentReaderService {
                     `There is no document at "${key}". Use the id a search result or a repository listing gave you.`,
                 );
             }
-            throw err;
+            // Whatever else went wrong stays in the log: the raw error names the bucket and full key,
+            // and what the agent is told ends up in the model's context and possibly in the answer.
+            logger.warn(`Could not read ${key}: ${(err as Error).message}`);
+            throw new Error(`The document at "${key}" could not be read right now.`);
         }
     }
 
@@ -190,7 +201,7 @@ export class DocumentReaderService {
         const segments = key.split("/");
         if (segments.length < 4 || segments[1] !== CODE_CATEGORY) return undefined;
         const path = segments.slice(3).join("/").replace(/\.md$/, "");
-        return path.startsWith("_") ? undefined : path;
+        return isRepositoryIndexDocument(path) ? undefined : path;
     }
 
     /**

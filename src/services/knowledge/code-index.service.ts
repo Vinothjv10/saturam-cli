@@ -2,7 +2,7 @@ import { getLogger } from "log4js";
 import { Service } from "typedi";
 import { z } from "zod";
 import { S3Service } from "../../integrations/aws/services/s3.service";
-import { CODE_CATEGORY } from "./knowledge-source.model";
+import { CODE_CATEGORY, isRepositoryIndexDocument } from "./knowledge-source.model";
 import { ProjectRegistryService, RegistryRepo, repoFullName } from "./project-registry.service";
 
 const logger = getLogger("CodeIndex");
@@ -32,6 +32,10 @@ export const MAX_REFERENCE_FILES = 40;
 
 /** How long a loaded state file is trusted, the same horizon the registry uses and for the same process. */
 export const CODE_INDEX_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** Extensions that make a name a file or module reference rather than a dotted symbol path. */
+const SOURCE_EXTENSION =
+    /\.(py|js|ts|tsx|jsx|mjs|cjs|java|kt|go|rb|rs|cs|php|sh|sql|tf|yaml|yml|json|toml|ini|cfg|xml|md)$/i;
 
 const RepoStateSchema = z.object({
     workspace: z.string(),
@@ -156,6 +160,7 @@ export interface LookupScope {
 @Service()
 export class CodeIndexService {
     private readonly cache = new Map<string, { index: RepoIndex; loadedAt: number }>();
+    private readonly fallbackCache = new Map<string, { repos: RegistryRepo[]; loadedAt: number }>();
     private readonly symbolCache = new Map<string, { index: SymbolIndex | undefined; loadedAt: number }>();
 
     constructor(
@@ -172,28 +177,40 @@ export class CodeIndexService {
         const listed = await this.registry.reposOf(projectSlug);
         if (listed.length > 0) return listed;
 
+        // Empty and failed listings are remembered too: without s3:ListBucket every call would
+        // otherwise repeat the same failing request, once per project.
+        const cached = this.fallbackCache.get(projectSlug);
+        if (cached && Date.now() - cached.loadedAt < CODE_INDEX_CACHE_TTL_MS) return cached.repos;
+        const repos = await this.listFromState(projectSlug);
+        this.fallbackCache.set(projectSlug, { repos, loadedAt: Date.now() });
+        return repos;
+    }
+
+    private async listFromState(projectSlug: string): Promise<RegistryRepo[]> {
         try {
             const keys = await this.s3.listStateObjects(`${CODE_INDEX_STATE_PREFIX}${projectSlug}`);
             const folders = keys
                 .map((key) => /\/([^/]+)\.json$/.exec(key)?.[1])
                 .filter((folder): folder is string => typeof folder === "string" && !folder.endsWith(".symbols"));
-            const repos: RegistryRepo[] = [];
-            for (const folder of folders) {
-                const index = await this.load(projectSlug, folder);
-                if (index) {
-                    repos.push({
-                        workspace: index.workspace,
-                        repoSlug: index.repoSlug,
-                        folder,
-                        branch: index.branch,
-                        commit: index.commit,
-                        documentCount: index.paths.length,
-                        indexedAt: index.indexedAt,
-                        complete: index.complete,
-                    });
-                }
-            }
-            return repos;
+            const indexes = await Promise.all(
+                folders.map(async (folder) => ({ folder, index: await this.load(projectSlug, folder) })),
+            );
+            return indexes.flatMap(({ folder, index }) =>
+                index
+                    ? [
+                          {
+                              workspace: index.workspace,
+                              repoSlug: index.repoSlug,
+                              folder,
+                              branch: index.branch,
+                              commit: index.commit,
+                              documentCount: index.paths.length,
+                              indexedAt: index.indexedAt,
+                              complete: index.complete,
+                          },
+                      ]
+                    : [],
+            );
         } catch (err) {
             logger.debug(`Could not list the code index for ${projectSlug}: ${(err as Error).message}`);
             return [];
@@ -240,7 +257,7 @@ export class CodeIndexService {
             .filter((key) => key.startsWith(documentPrefix))
             .map((key) => key.slice(documentPrefix.length).replace(/\.md$/, ""))
             // The repository index document is the pipeline's, not a file of the repository.
-            .filter((path) => path && !path.startsWith("_"))
+            .filter((path) => path && !isRepositoryIndexDocument(path))
             .sort();
 
         const index: RepoIndex = {
@@ -365,7 +382,9 @@ export class CodeIndexService {
      */
     public async findReferences(name: string, scope: LookupScope = {}): Promise<ReferenceLookup> {
         const query = name.trim().replace(/\(\)$/, "");
-        const bare = query.split(".").pop() ?? query;
+        // "nightly.py" and "jobs/nightly.py" name the module nightly, not a symbol called "py".
+        const withoutExtension = CodeIndexService.stripSourceExtension(query);
+        const bare = withoutExtension.split(/[./\\]+/).pop() || withoutExtension;
         const moduleName = CodeIndexService.moduleBasename(query);
 
         const definitions: SymbolMatch[] = [];
@@ -400,9 +419,16 @@ export class CodeIndexService {
         };
     }
 
-    /** `src/jobs/nightly.py`, `src.jobs.nightly`, `./nightly` and `nightly` all name the module `nightly`. */
+    private static stripSourceExtension(name: string): string {
+        return name.replace(SOURCE_EXTENSION, "");
+    }
+
+    /**
+     * `src/jobs/nightly.py`, `src.jobs.nightly`, `./nightly` and `nightly` all name the module `nightly`.
+     * The same strip is applied to a query and to an import, so `config.yaml` meets `./config.yaml`.
+     */
     private static moduleBasename(module: string): string {
-        const trimmed = module.trim().replace(/\.(py|js|ts|tsx|jsx|mjs|cjs)$/, "");
+        const trimmed = CodeIndexService.stripSourceExtension(module.trim());
         const segments = trimmed.split(/[./\\]+/).filter(Boolean);
         return (segments.at(-1) ?? trimmed).toLowerCase();
     }
@@ -414,9 +440,16 @@ export class CodeIndexService {
     ): Promise<{ searched: string[]; unindexed: string[] }> {
         const searched: string[] = [];
         const unindexed: string[] = [];
-        for (const { projectSlug, repo } of await this.scopedRepositories(scope)) {
-            const index = await this.loadSymbols(projectSlug, repo.folder);
-            const name = repoFullName(repo);
+        const targets = await this.scopedRepositories(scope);
+        const loaded = await Promise.all(
+            targets.map(async ({ projectSlug, repo }) => ({
+                projectSlug,
+                name: repoFullName(repo),
+                index: await this.loadSymbols(projectSlug, repo.folder),
+            })),
+        );
+        // Visited in the original order, so the results do not depend on which download finished first.
+        for (const { projectSlug, name, index } of loaded) {
             if (!index) {
                 unindexed.push(name);
                 continue;
@@ -430,13 +463,13 @@ export class CodeIndexService {
     private async scopedRepositories(scope: LookupScope): Promise<Array<{ projectSlug: string; repo: RegistryRepo }>> {
         const projects = scope.project ? [scope.project] : (await this.registry.load()).projects.map((p) => p.slug);
         const wanted = scope.repo?.trim().toLowerCase();
-        const result: Array<{ projectSlug: string; repo: RegistryRepo }> = [];
-        for (const projectSlug of projects) {
-            for (const repo of await this.repositories(projectSlug)) {
-                if (wanted && !CodeIndexService.namesOf(repo).includes(wanted)) continue;
-                result.push({ projectSlug, repo });
-            }
-        }
-        return result;
+        const perProject = await Promise.all(
+            projects.map(async (projectSlug) => ({ projectSlug, repos: await this.repositories(projectSlug) })),
+        );
+        return perProject.flatMap(({ projectSlug, repos }) =>
+            repos
+                .filter((repo) => !wanted || CodeIndexService.namesOf(repo).includes(wanted))
+                .map((repo) => ({ projectSlug, repo })),
+        );
     }
 }

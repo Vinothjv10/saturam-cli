@@ -153,4 +153,38 @@ describe("InitCommand Platform Config Flow", () => {
         expect(saved.providers![AIProvider.BEDROCK]).toMatchObject({ enabled: true, awsRegion: "ap-south-1" });
         expect(saved.providers![AIProvider.BEDROCK]!.awsProfile).toBeUndefined();
     });
+
+    it("keeps the Knowledge Base search type when init is re-run, and offers it as the default", async () => {
+        mockConfig.loadPersonalConfig.mockResolvedValue({
+            providers: {},
+            cloud: {
+                [CloudProvider.AWS]: {
+                    enabled: true,
+                    awsAuthMethod: "profile",
+                    awsRegion: "us-west-2",
+                    bedrockKnowledgeBase: { knowledgeBaseId: "KB123", searchType: "HYBRID" },
+                },
+            },
+        });
+        (select as jest.Mock)
+            .mockResolvedValueOnce("cloud")
+            .mockResolvedValueOnce(CloudProvider.AWS)
+            .mockResolvedValueOnce("profile")
+            .mockImplementationOnce(async (options: any) => options.default); // search type: accept the default
+        (input as jest.Mock)
+            .mockResolvedValueOnce("") // profile
+            .mockResolvedValueOnce("us-west-2") // region
+            .mockResolvedValueOnce("KB123") // knowledge base id
+            .mockResolvedValueOnce("") // data source
+            .mockResolvedValueOnce(""); // kb region
+        (confirm as jest.Mock).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+        await command.execute({});
+
+        const saved = mockConfig.savePersonalConfig.mock.calls.at(-1)![0];
+        expect(saved.cloud![CloudProvider.AWS]!.bedrockKnowledgeBase).toMatchObject({
+            knowledgeBaseId: "KB123",
+            searchType: "HYBRID",
+        });
+    });
 });

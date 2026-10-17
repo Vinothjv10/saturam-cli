@@ -1,3 +1,4 @@
+import { findUnsupportedIdentifiers } from "../../../../src/services/knowledge/unsupported-identifiers";
 import {
     KNOWLEDGE_TOOL_DEFINITIONS,
     KnowledgeToolExecutor,
@@ -154,6 +155,14 @@ describe("KnowledgeToolExecutor", () => {
             expect(executor.knownIdentifiers).toEqual(expect.arrayContaining(["run", "jobs/nightly.py"]));
         });
 
+        it("records the signature and docstring it printed as seen", async () => {
+            await run("find_symbol", { name: "run", project: "orion" });
+
+            expect(
+                findUnsupportedIdentifiers("`run(day: date)` builds the table.", "", [], executor.knownIdentifiers),
+            ).toEqual([]);
+        });
+
         it("says which repositories have no symbol index yet, so a miss is not read as absence", async () => {
             codeIndex.findSymbols.mockResolvedValue({
                 matches: [],
@@ -181,7 +190,10 @@ describe("KnowledgeToolExecutor", () => {
             expect(reply).toContain("Used in 2 file(s):");
             expect(reply).toContain("- acme/orion-core:jobs/scheduler.py line(s) 40, 88");
             expect(reply).toContain("- acme/orion-core:tests/test_nightly.py line(s) 7");
-            expect(reply).toContain("Imported as a module by:\n- acme/orion-core:jobs/scheduler.py (jobs.nightly)");
+            // The importer list says it matches by module name, so the agent does not present it as exact impact.
+            expect(reply).toMatch(
+                /Imported as a module by \(matched by module name only.*\):\n- acme\/orion-core:jobs\/scheduler\.py \(jobs\.nightly\)/,
+            );
             expect(executor.knownIdentifiers).toEqual(
                 expect.arrayContaining(["jobs/scheduler.py", "tests/test_nightly.py"]),
             );
@@ -315,9 +327,53 @@ describe("KnowledgeToolExecutor", () => {
             expect(reply).toContain('Could not read "x": There is no document at "x".');
         });
 
+        it("treats what a file mentions as seen, so a correct step naming it is not flagged", async () => {
+            reader.read.mockResolvedValue({
+                key: "orion/bitbucket/orion-core/jobs/nightly.py.md",
+                path: "jobs/nightly.py",
+                content: '1 | CONFIG = "config/schedule.yaml"\n2 | run("scripts/run_nightly.sh")',
+                identifiers: ["jobs/nightly.py"],
+            });
+            await run("read_document", { document: "acme/orion-core:jobs/nightly.py" });
+
+            const unsupported = findUnsupportedIdentifiers(
+                "Edit `config/schedule.yaml`, then check `scripts/run_nightly.sh`.",
+                "",
+                [],
+                executor.knownIdentifiers,
+            );
+
+            expect(unsupported).toEqual([]);
+            // A name the agent never saw is still caught.
+            expect(
+                findUnsupportedIdentifiers("Edit `config/invented.yaml`.", "", [], executor.knownIdentifiers),
+            ).toEqual(["config/invented.yaml"]);
+        });
+
+        it("does not charge the budget for a failed read", async () => {
+            reader.read.mockRejectedValue(new Error('There is no document at "x".'));
+            await run("read_document", { document: "x" });
+            await run("read_document", { document: "y" });
+
+            expect(executor.readCount).toBe(0);
+        });
+
+        it("does not charge the budget for the next part of a document already read", async () => {
+            await run("read_document", { document: "acme/orion-core:jobs/nightly.py" });
+            await run("read_document", { document: "acme/orion-core:jobs/nightly.py", startLine: 500 });
+            await run("read_document", { document: "acme/orion-core:jobs/nightly.py", startLine: 900 });
+
+            expect(executor.readCount).toBe(1);
+        });
+
         it("stops at the read budget and says so", async () => {
+            reader.read.mockImplementation(async (reference: string) => ({
+                key: reference,
+                content: "text",
+                identifiers: [],
+            }));
             for (let i = 0; i < MAX_READS_PER_QUESTION; i += 1) {
-                await run("read_document", { document: "orion/google-docs/12-jobs.md" });
+                await run("read_document", { document: `orion/google-docs/doc-${i}.md` });
             }
 
             const reply = await run("read_document", { document: "orion/google-docs/12-jobs.md" });

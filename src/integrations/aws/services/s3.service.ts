@@ -5,6 +5,21 @@ import { resolveAwsClientConfig } from "../utils/aws-credentials.util";
 
 const logger = getLogger("S3Service");
 
+/**
+ * A failed object fetch. The SDK's error code (`NoSuchKey`, `AccessDenied`, …) and HTTP status
+ * travel with the message, so a caller can tell "not there" from "broken" without parsing text.
+ */
+export class S3ObjectError extends Error {
+    constructor(
+        message: string,
+        public readonly code: string | undefined,
+        public readonly statusCode: number | undefined,
+    ) {
+        super(message);
+        this.name = "S3ObjectError";
+    }
+}
+
 @Service()
 export class S3Service {
     private client: import("@aws-sdk/client-s3").S3Client | undefined;
@@ -69,7 +84,14 @@ export class S3Service {
             }
             return Buffer.from(body);
         } catch (err) {
-            throw new Error(`Failed to get s3://${bucket}/${fullKey}: ${(err as Error).message}`);
+            // The SDK says "Access Denied" or "The specified key does not exist."; what tells a
+            // missing object from a broken bucket is the error's name and status, so both are kept.
+            const statusCode = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+            throw new S3ObjectError(
+                `Failed to get s3://${bucket}/${fullKey}: ${(err as Error).message}`,
+                (err as Error).name,
+                statusCode,
+            );
         }
     }
 

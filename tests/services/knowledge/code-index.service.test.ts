@@ -15,6 +15,8 @@ const state = {
         "orion/bitbucket/orion-core/jobs/nightly.py.md",
         "orion/bitbucket/orion-core/jobs/utils/io.py.md",
         "orion/bitbucket/orion-core/infra/main.tf.md",
+        "orion/bitbucket/orion-core/pkg/__init__.py.md",
+        "orion/bitbucket/orion-core/__main__.py.md",
     ],
 };
 
@@ -52,8 +54,18 @@ describe("CodeIndexService", () => {
 
         expect(s3.listStateObjects).toHaveBeenCalledWith("code-index/orion");
         expect(repos).toMatchObject([
-            { workspace: "acme", repoSlug: "orion-core", folder: "orion-core", documentCount: 4 },
+            { workspace: "acme", repoSlug: "orion-core", folder: "orion-core", documentCount: 6 },
         ]);
+    });
+
+    it("remembers an empty or failed fallback listing instead of repeating it on every call", async () => {
+        registry.reposOf.mockResolvedValue([]);
+        s3.listStateObjects.mockRejectedValue(new Error("AccessDenied"));
+
+        await expect(service.repositories("orion")).resolves.toEqual([]);
+        await expect(service.repositories("orion")).resolves.toEqual([]);
+
+        expect(s3.listStateObjects).toHaveBeenCalledTimes(1);
     });
 
     it("loads a repository's files from the state file, dropping the pipeline's own index document", async () => {
@@ -61,7 +73,14 @@ describe("CodeIndexService", () => {
 
         expect(s3.getStateObject).toHaveBeenCalledWith("code-index/orion/orion-core.json");
         expect(index).toMatchObject({ fullName: "acme/orion-core", branch: "main", complete: true });
-        expect(index?.paths).toEqual(["README.md", "infra/main.tf", "jobs/nightly.py", "jobs/utils/io.py"]);
+        expect(index?.paths).toEqual([
+            "README.md",
+            "__main__.py",
+            "infra/main.tf",
+            "jobs/nightly.py",
+            "jobs/utils/io.py",
+            "pkg/__init__.py",
+        ]);
     });
 
     it("finds a repository by slug, folder or full name, in any case", async () => {
@@ -77,8 +96,9 @@ describe("CodeIndexService", () => {
         expect(root.subdirectories).toEqual([
             { name: "infra", files: 1 },
             { name: "jobs", files: 2 },
+            { name: "pkg", files: 1 },
         ]);
-        expect(root.files).toEqual(["README.md"]);
+        expect(root.files).toEqual(["README.md", "__main__.py"]);
 
         const jobs = service.listDirectory(index, "jobs/");
         expect(jobs).toMatchObject({
@@ -127,6 +147,7 @@ describe("CodeIndexService", () => {
             imports: [
                 { path: "jobs/scheduler.py", modules: ["jobs.nightly", "os"] },
                 { path: "tests/test_nightly.py", modules: ["../jobs/nightly"] },
+                { path: "jobs/settings.py", modules: ["./config.yaml"] },
             ],
         };
 
@@ -190,6 +211,17 @@ describe("CodeIndexService", () => {
             // "jobs.nightly" and "../jobs/nightly" both name the module `nightly`; `run` is not a module.
             expect(lookup.importers).toEqual([]);
             expect(lookup.totalFiles).toBe(2);
+        });
+
+        it("treats a query with a file extension as the module, not a symbol called after the extension", async () => {
+            const lookup = await service.findReferences("nightly.py", { project: "orion" });
+
+            expect(lookup.importers.map((hit) => hit.path)).toEqual(["jobs/scheduler.py", "tests/test_nightly.py"]);
+            expect(lookup.definitions).toEqual([]);
+
+            // The same strip applies to the import, so a data file meets the module that loads it.
+            const yaml = await service.findReferences("config.yaml", { project: "orion" });
+            expect(yaml.importers.map((hit) => hit.path)).toEqual(["jobs/settings.py"]);
         });
 
         it("finds the files that import a module by its last segment, however the path is written", async () => {
