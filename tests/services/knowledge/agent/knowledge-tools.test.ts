@@ -129,17 +129,140 @@ describe("KnowledgeToolExecutor", () => {
         executor = new KnowledgeToolExecutor(knowledgeBase, registry, reader, codeIndex, []);
     });
 
-    it("offers search, read, browse, the symbol lookups, the plan declaration, list and recall", () => {
+    it("offers search, read, guides, browse, the symbol lookups, the two declarations, list, recall and notes", () => {
         expect(KNOWLEDGE_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
             "search_documentation",
             "read_document",
+            "open_guide",
             "browse_repository",
             "find_symbol",
             "find_references",
             "begin_change_plan",
+            "begin_walkthrough",
             "list_projects",
             "recall_conversation",
+            "note_findings",
         ]);
+    });
+
+    describe("open_guide", () => {
+        const guides = [
+            "docs/onboarding/00-overview.md",
+            "docs/onboarding/03-architecture.md",
+            "docs/onboarding/22-airflow-triggering-strategy.md",
+            "docs/onboarding/25-change-impact-map.md",
+        ];
+
+        beforeEach(() => {
+            codeIndex.find.mockResolvedValue({ ...index, paths: [...index.paths, ...guides] });
+        });
+
+        it("lists the project's guides, with what each holds, when no topic is given", async () => {
+            const reply = await run("open_guide", { project: "orion" });
+
+            expect(reply).toContain("03 architecture — components, how they communicate");
+            expect(reply).toContain("22 airflow-triggering-strategy — deep dive");
+            expect(reply).toContain("acme/orion-core:docs/onboarding/25-change-impact-map.md");
+            expect(executor.knownIdentifiers).toContain("docs/onboarding/03-architecture.md");
+            expect(reader.read).not.toHaveBeenCalled();
+        });
+
+        it("opens a guide by name, number or alias, without charging the read budget", async () => {
+            await run("open_guide", { project: "orion", topic: "architecture" });
+            await run("open_guide", { project: "orion", topic: "25" });
+            await run("open_guide", { project: "orion", topic: "the impact map" });
+            await run("open_guide", { project: "orion", topic: "airflow" });
+
+            expect(reader.read.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+                "acme/orion-core:docs/onboarding/03-architecture.md",
+                "acme/orion-core:docs/onboarding/25-change-impact-map.md",
+                "acme/orion-core:docs/onboarding/25-change-impact-map.md",
+                "acme/orion-core:docs/onboarding/22-airflow-triggering-strategy.md",
+            ]);
+            expect(executor.readCount).toBe(0);
+        });
+
+        it("falls back to the written documentation and reads the document that carries the title", async () => {
+            codeIndex.find.mockResolvedValue(index);
+            knowledgeBase.retrieve.mockResolvedValue([
+                {
+                    ...docChunk,
+                    location: "s3://kb/onboarding/orion/google-docs/03-architecture.md",
+                    metadata: { ...docChunk.metadata, title: "03-architecture" },
+                },
+            ]);
+
+            await run("open_guide", { project: "orion", topic: "architecture" });
+
+            expect(knowledgeBase.retrieve).toHaveBeenCalledWith("03-architecture", expect.anything());
+            expect(reader.read).toHaveBeenCalledWith("orion/google-docs/03-architecture.md", {});
+            expect(executor.readCount).toBe(0);
+        });
+
+        it("says plainly when the project has no such guide, and shows the nearest passages", async () => {
+            codeIndex.find.mockResolvedValue(index);
+            knowledgeBase.retrieve.mockResolvedValue([docChunk]);
+
+            const reply = await run("open_guide", { project: "orion", topic: "decisions" });
+
+            expect(reply).toContain('Project "orion" has no "decisions" guide.');
+            expect(reply).toContain("12-jobs");
+            expect(reader.read).not.toHaveBeenCalled();
+        });
+
+        it("requires a project", async () => {
+            expect(await run("open_guide", {})).toContain("`project` argument is required");
+        });
+    });
+
+    describe("begin_walkthrough", () => {
+        it("records the subject, widens the budget and returns the method to work through", async () => {
+            const reply = await run("begin_walkthrough", {
+                subject: "how the nightly pipeline runs",
+                focus: "the triggers",
+            });
+
+            expect(reply).toContain("Walkthrough recorded: how the nightly pipeline runs Focus: the triggers");
+            expect(reply).toContain("1. Boundaries");
+            expect(reply).toContain("3. The path");
+            expect(reply).toContain("Design decisions and trade-offs");
+            expect(executor.walkthrough).toEqual({ subject: "how the nightly pipeline runs", focus: "the triggers" });
+            expect(executor.deepDive).toBe(true);
+        });
+
+        it("requires a subject and records nothing without one", async () => {
+            expect(await run("begin_walkthrough", {})).toContain("`subject` argument is required");
+            expect(executor.walkthrough).toBeUndefined();
+            expect(executor.deepDive).toBe(false);
+        });
+    });
+
+    describe("note_findings", () => {
+        it("keeps the note and reports the budget used so far", async () => {
+            await run("search_documentation", { query: "nightly" });
+
+            const reply = await run("note_findings", {
+                established: "the daemon in jobs/daemon.py triggers nightly.run",
+                missing: "what resets the raw tables first",
+                next: "find_references(reset_raw_tables)",
+            });
+
+            expect(reply).toContain("Noted (1). Searches so far: 1; reads: 0 of");
+            expect(reply).toContain("Still missing: what resets the raw tables first");
+            expect(reply).toContain("Next: find_references(reset_raw_tables)");
+            expect(executor.findings).toEqual([
+                {
+                    established: "the daemon in jobs/daemon.py triggers nightly.run",
+                    missing: "what resets the raw tables first",
+                    next: "find_references(reset_raw_tables)",
+                },
+            ]);
+        });
+
+        it("requires something established", async () => {
+            expect(await run("note_findings", {})).toContain("`established` argument is required");
+            expect(executor.findings).toEqual([]);
+        });
     });
 
     describe("find_symbol", () => {
@@ -226,7 +349,7 @@ describe("KnowledgeToolExecutor", () => {
             expect(reply).toContain("Plan recorded: move the nightly job to 03:00 Constraints: no downtime");
             expect(reply).toContain("1. Locate");
             expect(reply).toContain("find_references for every use");
-            expect(reply).toContain("change-impact map or a making-changes recipe");
+            expect(reply).toContain("change-impact-map and making-changes guides first (open_guide)");
             expect(reply).toContain("Write the plan as numbered steps");
         });
 

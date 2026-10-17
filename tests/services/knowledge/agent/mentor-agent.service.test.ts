@@ -203,6 +203,82 @@ describe("MentorAgentService", () => {
         expect(result.planGoal).toBe("move the nightly job to 03:00");
     });
 
+    it("widens the round budget once the agent declares a walkthrough, and reports the subject", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("begin_walkthrough", { subject: "how the nightly pipeline runs" }))
+            .mockResolvedValue(withToolCall("search_documentation", { query: "again" }));
+
+        const result = await ask("walk me through the nightly pipeline end to end");
+
+        const messages = bound.invoke.mock.calls[1][0] as Array<{ content: unknown }>;
+        expect(messages.some((m) => String(m.content).includes("Walkthrough recorded: how the nightly"))).toBe(true);
+        expect(bound.invoke).toHaveBeenCalledTimes(MAX_PLAN_TOOL_ROUNDS);
+        expect(result.walkthroughSubject).toBe("how the nightly pipeline runs");
+    });
+
+    it("sends unsupported names back once, with the tools still attached, before finishing", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("search_documentation", { query: "scheduler" }))
+            .mockResolvedValueOnce(new AIMessage({ content: "Edit `config/schedule.yaml` to change it." }))
+            .mockResolvedValueOnce(new AIMessage({ content: "It is driven by the jobs table." }));
+
+        const result = await ask();
+
+        expect(result.answer).toBe("It is driven by the jobs table.");
+        expect(bound.invoke).toHaveBeenCalledTimes(3);
+        const third = bound.invoke.mock.calls[2][0] as Array<{ content: unknown }>;
+        const request = String(third[third.length - 1].content);
+        expect(request).toContain("nothing you retrieved supports this name: `config/schedule.yaml`");
+        expect(request).toContain("verify it with a tool");
+    });
+
+    it("lets the agent verify a name with a tool during that round", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("search_documentation", { query: "scheduler" }))
+            .mockResolvedValueOnce(new AIMessage({ content: "It is in `jobs/nightly.py`." }))
+            .mockResolvedValueOnce(withToolCall("read_document", { document: "acme/core:jobs/nightly.py" }, "c2"))
+            .mockResolvedValueOnce(new AIMessage({ content: "It is in `jobs/nightly.py`, in run()." }));
+
+        const result = await ask();
+
+        expect(reader.read).toHaveBeenCalledTimes(1);
+        expect(result.answer).toBe("It is in `jobs/nightly.py`, in run().");
+        expect(result.knownIdentifiers).toContain("jobs/nightly.py");
+    });
+
+    it("verifies at most once, and finishes without a round when every name is supported", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("search_documentation", { query: "scheduler" }))
+            .mockResolvedValueOnce(new AIMessage({ content: "See `a/one.py`." }))
+            .mockResolvedValueOnce(new AIMessage({ content: "See `b/two.py`." }));
+        expect((await ask()).answer).toBe("See `b/two.py`.");
+        expect(bound.invoke).toHaveBeenCalledTimes(3);
+
+        bound.invoke.mockReset();
+        bound.invoke
+            .mockResolvedValueOnce(withToolCall("search_documentation", { query: "scheduler" }))
+            .mockResolvedValueOnce(new AIMessage({ content: "It reads a jobs table." }));
+        expect((await ask()).answer).toBe("It reads a jobs table.");
+        expect(bound.invoke).toHaveBeenCalledTimes(2);
+    });
+
+    it("puts the agent's own notes into the forced final prompt", async () => {
+        bound.invoke
+            .mockResolvedValueOnce(
+                withToolCall("note_findings", { established: "the daemon in jobs/daemon.py triggers it" }),
+            )
+            .mockResolvedValue(withToolCall("search_documentation", { query: "again" }));
+
+        const result = await ask();
+
+        expect(result.answer).toBe("forced answer");
+        expect(result.findings).toEqual([{ established: "the daemon in jobs/daemon.py triggers it" }]);
+        const forcedMessages = llm.prompt.mock.calls[0][0] as Array<{ content: unknown }>;
+        const last = String(forcedMessages[forcedMessages.length - 1].content);
+        expect(last).toContain("Your notes so far:");
+        expect(last).toContain("- the daemon in jobs/daemon.py triggers it");
+    });
+
     it("leaves the goal unset for a question that was not a change", async () => {
         bound.invoke
             .mockResolvedValueOnce(withToolCall("search_documentation", { query: "scheduler" }))

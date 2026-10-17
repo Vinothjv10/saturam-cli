@@ -180,6 +180,10 @@ export class AnswerFlowService {
      * A name the agent met by browsing a repository or reading a file whole is as real as one a
      * passage contained, which is what `knownIdentifiers` carries; without it a correct path
      * taken from a directory listing would be revised away as an invention.
+     *
+     * The agent itself gets the first chance: MentorAgentService sends unsupported names back to
+     * it once, with its tools still attached, so it can look them up. What arrives here is what
+     * survived that, and is revised blind as the last resort.
      */
     private async withUnsupportedIdentifiersRevised(
         question: string,

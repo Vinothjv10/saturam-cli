@@ -86,6 +86,18 @@
             "notes": "Service question with both a general and a project-specific half. The project half must mention that Airflow's own scheduler is not what triggers the DAGs here."
         },
         {
+            "id": "arch-mrf-end-to-end",
+            "question": "Walk me through how the MRF pipeline works end to end: what triggers it, what each stage reads and writes, and where the results end up.",
+            "group": "architecture",
+            "notes": "Must call begin_walkthrough and open the architecture guide when the project has one. The answer follows the data in order, names the file and function at each hop, names the scheduler daemon as the trigger, and separates the documents' intent from what the code does only where they differ."
+        },
+        {
+            "id": "arch-smile-components",
+            "question": "Explain the architecture of the smile project: the main components, how they talk to each other, and the design decisions behind that shape.",
+            "group": "architecture",
+            "notes": "Architecture overview. Should open 03-architecture and 31-decisions when they exist, show the components and their communication as a short text diagram, and give trade-offs as an engineer would rather than listing document excerpts."
+        },
+        {
             "id": "plan-change-weekly-schedule",
             "question": "I need to move the weekly pipeline run from Sunday to Friday. Give me the exact change: which files, what to edit, what else it affects, and how I verify it.",
             "group": "change-plan",

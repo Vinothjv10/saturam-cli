@@ -56,7 +56,7 @@ describe("mentor agent prompt", () => {
             const text = systemTextOf();
             expect(text).toContain("call begin_change_plan first");
             expect(text).toContain("find_symbol for where it is defined, find_references for everything that uses it");
-            expect(text).toContain("change-impact map or making-changes recipe first");
+            expect(text).toContain("change-impact-map and making-changes guides first, through open_guide");
         });
 
         it("asks for the one shape a plan needs: numbered, verifiable steps with impact and verification", () => {
@@ -74,6 +74,33 @@ describe("mentor agent prompt", () => {
 
         it("says none of this when the provider cannot call tools", () => {
             expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("begin_change_plan");
+        });
+    });
+
+    describe("explaining how something works", () => {
+        it("has the agent declare the walkthrough first, then follow the path hop by hop", () => {
+            const text = systemTextOf();
+            expect(text).toContain("call begin_walkthrough first");
+            expect(text).toContain("follow the path through the code hop by hop, reading each file you will describe");
+            expect(text).toContain("Write in the order the data moves");
+            expect(text).toContain("show the path as a short text diagram");
+        });
+
+        it("keeps a narrow single-function question out of the walkthrough", () => {
+            expect(systemTextOf()).toContain("does not need the walkthrough");
+        });
+
+        it("says none of this when the provider cannot call tools", () => {
+            expect(systemTextOf({ preGatheredContext: "(nothing retrieved)" })).not.toContain("begin_walkthrough");
+        });
+    });
+
+    describe("finding what it needs", () => {
+        it("points at the guides by name, at notes across rounds, and at parallel searches", () => {
+            const text = systemTextOf();
+            expect(text).toContain("open_guide opens one by name");
+            expect(text).toContain("call note_findings after each round of results");
+            expect(text).toContain("run the ones that do not depend on each other in the same round");
         });
     });
 

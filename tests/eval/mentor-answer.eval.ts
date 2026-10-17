@@ -32,7 +32,9 @@ const QuestionSchema = z.object({
     id: z.string(),
     question: z.string(),
     /** Which behaviour the case exercises, so a regression points at one area rather than the mean. */
-    group: z.enum(["descriptive", "scenario", "guardrail", "blended", "change-plan"]).default("descriptive"),
+    group: z
+        .enum(["descriptive", "scenario", "guardrail", "blended", "change-plan", "architecture"])
+        .default("descriptive"),
     notes: z.string().optional(),
     mustMention: z.array(z.string()).optional(),
 });
