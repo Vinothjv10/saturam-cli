@@ -14,6 +14,7 @@ import { explainBedrockModelError } from "../services/llm-service";
 import { stripInlineCitations } from "../utils/citations.util";
 import { slugify } from "../utils/slug.util";
 import { TypedCommand, TypedInputs } from "./base";
+import { renderLumosBanner } from "./lumos-banner";
 
 const logger = getLogger("LumosCommand");
 
@@ -266,6 +267,12 @@ export class LumosCommand implements TypedCommand<typeof INPUTS> {
         logger.info("");
     }
 
+    /** The welcome, on a terminal; a pipe or a log gets the plain intro lines only. */
+    private printBanner(): void {
+        if (!process.stdout.isTTY) return;
+        for (const line of renderLumosBanner(process.stdout.columns || 80)) logger.info(line);
+    }
+
     /**
      * Interactive mentoring chat.
      *
@@ -274,6 +281,7 @@ export class LumosCommand implements TypedCommand<typeof INPUTS> {
      * project is read off the retrieved evidence, never asked for.
      */
     private async runChatSearch(newSession?: boolean): Promise<void> {
+        this.printBanner();
         const hasLlm = await this.configService.hasAnyLLMProviderConfigured();
         if (!hasLlm) {
             logger.warn("No AI/LLM provider is configured yet.");
