@@ -296,8 +296,15 @@ export class LumosCommand implements TypedCommand<typeof INPUTS> {
             logger.info("Started a new conversation.");
         }
 
-        logger.info("Ask about any indexed project, or a general engineering question.");
-        logger.info("Type 'exit' or leave blank to quit.\n");
+        logger.info(
+            "Ask how a system works, where something lives, what a change would touch, or any engineering question.",
+        );
+        logger.info(
+            colors.dim(
+                "Answers are grounded in your indexed documentation and source code, with their sources listed.",
+            ),
+        );
+        logger.info(colors.dim("Type 'exit' or leave the line blank to quit.\n"));
 
         // Set when the user picks a suggested follow-up, so the next iteration skips the prompt.
         let queuedQuestion: string | undefined;
