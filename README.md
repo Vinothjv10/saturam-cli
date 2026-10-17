@@ -88,7 +88,7 @@ sat-cli init
 
 ### `sat-cli lumos`
 
-Ask questions about your projects, answered from the onboarding documentation and the source code indexed in the Bedrock Knowledge Base. Formerly `sat-cli onboard`; the old name still works as an alias.
+Ask questions about your projects, answered from the onboarding documentation and the source code indexed in the Bedrock Knowledge Base. Formerly `sat-cli onboard`; the old name still works for now and prints a reminder to switch.
 
 ```bash
 # Chat: ask questions and get a mentoring answer grounded in the Knowledge Base.

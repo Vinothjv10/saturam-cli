@@ -318,4 +318,10 @@ describe("LumosCommand Mode Routing", () => {
             }
         });
     });
+
+    it("is called lumos, and keeps its former names for a reminder rather than as shortcuts", () => {
+        expect(command.name).toBe("lumos");
+        expect(command.aliases).toEqual([]);
+        expect(command.formerNames).toEqual(["onboard", "ob", "onboarding"]);
+    });
 });

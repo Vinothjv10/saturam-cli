@@ -67,7 +67,9 @@ export class LumosCommand implements TypedCommand<typeof INPUTS> {
     readonly description =
         "Chat with a mentor about your projects, grounded in the indexed onboarding documentation (needs an AI/LLM provider and a Bedrock Knowledge Base from 'sat-cli init'); --knowledge-base shows raw retrieval results instead";
     readonly category = "common" as const;
-    readonly aliases = ["onboard", "ob", "onboarding"];
+    readonly aliases: string[] = [];
+    /** Renamed from `onboard` in October 2026; these keep working, with a reminder of the new name. */
+    readonly formerNames = ["onboard", "ob", "onboarding"];
     readonly inputs = INPUTS;
 
     constructor(
