@@ -16,7 +16,7 @@ export interface SearchScope {
 
 /**
  * Owns Bedrock Knowledge Base retrieval and RAG chat (retrieve → prompt build → LLM call),
- * so commands stay thin — on `main` no command calls LlmService directly, and OnboardCommand's
+ * so commands stay thin — on `main` no command calls LlmService directly, and LumosCommand's
  * chat/`--knowledge-base` flows should follow the same pattern instead of building the
  * pipeline inline.
  */

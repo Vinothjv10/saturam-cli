@@ -73,7 +73,7 @@ export class Cli {
                 .description(command.description + "\n\n");
 
             // A command with no positional input treats a stray one as a mistake — most likely
-            // an invocation written against an argument the command used to accept (`onboard`
+            // an invocation written against an argument the command used to accept (`lumos`
             // once took a spreadsheet). Commander ignores excess arguments by default, which
             // would turn that into a silent success in whatever script is still running it.
             if (!command.inputs.some((input) => input.argument)) {

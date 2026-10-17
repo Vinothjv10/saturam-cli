@@ -1,6 +1,6 @@
 # The Slack bot
 
-`sat-cli onboard` also runs as a Slack bot: the same answering flow, packaged as two AWS Lambda
+`sat-cli lumos` also runs as a Slack bot: the same answering flow, packaged as two AWS Lambda
 functions. Mention it in a channel or DM it; it answers in a thread with sources, follow-up buttons
 and 👍/👎 feedback. Each thread is one conversation, and each person's recent history carries across
 their threads.
@@ -14,9 +14,9 @@ repository, `sat-cli-internal-infra/onboarding-slack-lamba`.
 | Entry point       | Runs where                | Source                                    | Purpose                                                     |
 | ----------------- | ------------------------- | ----------------------------------------- | ----------------------------------------------------------- |
 | `ingress.handler` | Lambda behind API Gateway | `src/entrypoints/slack-ingress.lambda.ts` | Receives Slack events, replies within 3 s, queues questions |
-| `worker.handler`  | Lambda triggered by SQS   | `src/entrypoints/slack-worker.lambda.ts`  | Answers queued questions with the `onboard` flow            |
+| `worker.handler`  | Lambda triggered by SQS   | `src/entrypoints/slack-worker.lambda.ts`  | Answers queued questions with the `lumos` flow              |
 | `pnpm slack:dev`  | your machine              | `src/entrypoints/slack-socket-mode.ts`    | The whole bot locally over Socket Mode                      |
-| `sat-cli onboard` | a terminal                | `src/entrypoints/main.ts`                 | Unchanged; the bot shares its `AnswerFlowService`           |
+| `sat-cli lumos`   | a terminal                | `src/entrypoints/main.ts`                 | Unchanged; the bot shares its `AnswerFlowService`           |
 
 Both handlers ship in one zip: `pnpm slack:bundle` → `dist/slack-bot/slack-bot-lambda.zip` (about
 3 MB), built by `scripts/build-slack-lambda.mjs`. The build fails if the bundle reaches anything

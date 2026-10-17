@@ -7,7 +7,7 @@ queries is produced.
 > files, normalizing them to Markdown, and uploading them to S3 for Bedrock to ingest now runs as
 > a scheduled AWS Lambda off a Google Sheet — see the `onboarding-gsheet-lamba` service in
 > `sat-cli-internal-infra` (`README.md`, `DEPLOY.md`, and `SHEET-COLUMNS.md` for the sheet
-> format). `sat-cli onboard` no longer syncs anything; it is now purely the query side.
+> format). `sat-cli lumos` no longer syncs anything; it is now purely the query side.
 
 ---
 
@@ -130,19 +130,19 @@ Both modes read the corpus the Lambda indexed; neither fetches from Confluence, 
 Use the AWS credentials and Bedrock Knowledge Base configured by `sat-cli init` to run the equivalent of the AWS console's **Standard retrieval only** mode directly in the terminal:
 
 ```bash
-sat-cli onboard --knowledge-base
-sat-cli onboard --knowledge-base --project "Saturam"
+sat-cli lumos --knowledge-base
+sat-cli lumos --knowledge-base --project "Saturam"
 ```
 
 Enter questions interactively to see ranked matching chunks with their relevance scores, source locations, and metadata. This command calls Bedrock's `Retrieve` API and does not generate an AI answer. Enter a blank question, type `exit`, `quit`, or `:q`, or press Ctrl+C to stop.
 
-#### Asking questions (`sat-cli onboard`)
+#### Asking questions (`sat-cli lumos`)
 
-`--knowledge-base` shows you the raw retrieved chunks. `sat-cli onboard` on its own answers the question the way a senior engineer would explain it to someone who just joined:
+`--knowledge-base` shows you the raw retrieved chunks. `sat-cli lumos` on its own answers the question the way a senior engineer would explain it to someone who just joined:
 
 ```bash
-sat-cli onboard
-sat-cli onboard --new-session
+sat-cli lumos
+sat-cli lumos --new-session
 ```
 
 There is no `--project` flag here — the project is determined per question. `--project`, `--kind docs|code|all` and `--repo workspace/repo-slug` still apply to `--knowledge-base`, which is a raw retrieval tool.

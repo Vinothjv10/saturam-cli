@@ -16,34 +16,34 @@ Projects differ. A backend service has endpoints and workers; a data pipeline ha
 
 ## 2. How Lumos uses these documents
 
-A document set lives in the repository under `docs/onboarding/`. The Lumos pipeline reads the branch named in the onboarding sheet, writes every Markdown file it finds to S3 with a metadata sidecar, and the Bedrock Knowledge Base indexes it beside the source files. The mentor in `sat-cli onboard` and the Slack bot then retrieve from both, read whole documents when a passage is not enough, and cite paths. A set kept in Google Drive is indexed the same way, but a set in the repository is versioned with the code it describes and reviewed in the same pull request, which is why the repository is the preferred home.
+A document set lives in the repository under `docs/onboarding/`. The Lumos pipeline reads the branch named in the onboarding sheet, writes every Markdown file it finds to S3 with a metadata sidecar, and the Bedrock Knowledge Base indexes it beside the source files. The mentor in `sat-cli lumos` and the Slack bot then retrieve from both, read whole documents when a passage is not enough, and cite paths. A set kept in Google Drive is indexed the same way, but a set in the repository is versioned with the code it describes and reviewed in the same pull request, which is why the repository is the preferred home.
 
 Lumos relies on the following, and the rest of this standard exists to guarantee them:
 
-| What Lumos relies on | Why |
-| --- | --- |
-| The folder `docs/onboarding/` and the file names in section 4 | Retrieval and the repository index find a project's documents without guessing; the same question finds the same document in every project |
+| What Lumos relies on                                                                                                                     | Why                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The folder `docs/onboarding/` and the file names in section 4                                                                            | Retrieval and the repository index find a project's documents without guessing; the same question finds the same document in every project         |
 | The YAML front matter in section 5, with `project`, `profiles`, `code_paths`, `tables`, `jobs`, `apis`, `events`, `configs`, `resources` | These become the links from a document to the code, data, jobs and infrastructure it describes, which is what makes change-impact answers possible |
-| A "Related code" section at the end of every document | A second, human-readable copy of the same links, which the identifier guard uses to accept paths the document names |
-| `25-change-impact-map.md` with one row per entity | The first thing the mentor reads for "what will this change affect" |
-| `23-making-changes.md` with one recipe per common change | The pattern the mentor copies when asked to plan a change, including a new feature |
-| `21-open-questions.md` and `owners` in every front matter | What the mentor says when it does not know, and whom it points to |
-| No secret value anywhere | Documents are read by everyone who can query Lumos; the pipeline redacts what it recognises, and it does not recognise everything |
+| A "Related code" section at the end of every document                                                                                    | A second, human-readable copy of the same links, which the identifier guard uses to accept paths the document names                                |
+| `25-change-impact-map.md` with one row per entity                                                                                        | The first thing the mentor reads for "what will this change affect"                                                                                |
+| `23-making-changes.md` with one recipe per common change                                                                                 | The pattern the mentor copies when asked to plan a change, including a new feature                                                                 |
+| `21-open-questions.md` and `owners` in every front matter                                                                                | What the mentor says when it does not know, and whom it points to                                                                                  |
+| No secret value anywhere                                                                                                                 | Documents are read by everyone who can query Lumos; the pipeline redacts what it recognises, and it does not recognise everything                  |
 
 ## 3. Project profiles
 
 A profile is a kind of project. A repository has one or more; a monorepo lists every profile it contains. The profiles are declared in `00-overview.md` and in the `profiles` field of every document's front matter, and they decide which documents the project writes (section 4) and which entity kinds its impact map tracks (section 8).
 
-| Profile | What it means | Typical contents |
-| --- | --- | --- |
-| `service` | A backend service or API | HTTP or RPC endpoints, handlers, workers, a database, outbound calls |
-| `web` | A browser application | Screens, routes, state, calls to services |
-| `mobile` | An iOS or Android application | Screens, navigation, local storage, calls to services, store release |
-| `pipeline` | Data processing, ETL, batch or streaming | Jobs, DAGs, schedulers, tables, transformations, data quality checks |
-| `ml` | Models and the code around them | Datasets, features, training, evaluation, model artifacts, serving, retraining |
-| `infra` | Infrastructure as code or platform tooling | Cloud resources, networks, environments, pipelines that deploy them |
-| `library` | A package, SDK or command-line tool consumed by other code | A public API or command set, versioning, release, compatibility |
-| `serverless` | Functions and event-driven components | Functions, triggers, queues, topics, schedules, the resources that wire them |
+| Profile      | What it means                                              | Typical contents                                                               |
+| ------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `service`    | A backend service or API                                   | HTTP or RPC endpoints, handlers, workers, a database, outbound calls           |
+| `web`        | A browser application                                      | Screens, routes, state, calls to services                                      |
+| `mobile`     | An iOS or Android application                              | Screens, navigation, local storage, calls to services, store release           |
+| `pipeline`   | Data processing, ETL, batch or streaming                   | Jobs, DAGs, schedulers, tables, transformations, data quality checks           |
+| `ml`         | Models and the code around them                            | Datasets, features, training, evaluation, model artifacts, serving, retraining |
+| `infra`      | Infrastructure as code or platform tooling                 | Cloud resources, networks, environments, pipelines that deploy them            |
+| `library`    | A package, SDK or command-line tool consumed by other code | A public API or command set, versioning, release, compatibility                |
+| `serverless` | Functions and event-driven components                      | Functions, triggers, queues, topics, schedules, the resources that wire them   |
 
 A profile that is not listed here is written as the closest one and the difference is explained in `00-overview.md`. A profile is added to this table when a second project needs it.
 
@@ -51,78 +51,78 @@ A profile that is not listed here is written as the closest one and the differen
 
 Thirty-two numbered files. Numbers sort them in reading order and never change meaning; a project writes only the files its profiles require, and omits the rest without renumbering. "Required" in the matrix below means every project with that profile writes the file; "if present" means the project writes it when it has that part; a dash means the file does not apply. A topic that fits none of them takes a `22` slot: `22-<topic>.md`, or `22a-`, `22b-` when there are several. Sets that predate this version keep their file names; the names below are the same slots.
 
-| File | What it holds | Source of truth in the code |
-| --- | --- | --- |
-| `00-overview.md` | What the project is, for whom, its profiles, its main parts, status, owners, and the list of documents in this folder | README, entry points, CODEOWNERS, the onboarding sheet |
-| `01-tech-stack.md` | Languages, frameworks, runtimes, platforms and infrastructure, with versions | Manifests, lock files, Dockerfiles, CI, IaC |
-| `02-repository-map.md` | Every top-level directory and key file: purpose, entry points, who imports it | The tree |
-| `03-architecture.md` | Components, how they communicate, the flow of data or requests end to end, where it runs, a diagram | Code, Dockerfiles, run scripts, configs, IaC |
-| `04-running-locally.md` | Prerequisites, setup, run, seed data, the failures newcomers hit | Run scripts, README, manifests |
-| `05-backend.md` | Services and modules, their endpoints or handlers, workers, functions, what each owns | Server and function code |
-| `06-frontend.md` | Client applications: web, mobile, or a command-line surface; structure, state, how they call services | Client code |
-| `07-screens-and-metrics.md` | Each screen or command: purpose, what it shows or does, the data or calls behind it | Client code and queries |
-| `08-data-model.md` | Each table, collection, schema, dataset or artifact store: the fields that matter, keys, producers, consumers | DDL, ORM models, SQL, schema files |
-| `09-data-lineage.md` | Sources to outputs, per domain or per dataset | Pipeline and training code, SQL |
-| `10-transformations.md` | Each processing step: input, logic, output, file and function; feature engineering and training steps for models | Pipeline and training code |
-| `11-metrics.md` | Each metric: definition, formula, source, where computed; business metrics, model metrics or service indicators | Code, dashboards as code |
-| `12-pipelines.md` | Each job: DAG, cron job, workflow, scheduled function or queue consumer; file, trigger, reads, writes, order, dependencies, failure behaviour, active or not | Job definitions, schedulers, scripts, IaC triggers |
-| `13-data-quality.md` | Checks and validations that exist, where, what they catch, and the gaps | Code |
-| `14-testing.md` | How to run the tests, what they cover, what they do not, how CI runs them | Test folders, CI |
-| `15-integrations.md` | Each external system: direction, protocol, authentication by name, failure modes, rate limits | Clients, configs |
-| `16-configuration.md` | Every config key, environment variable and feature flag: where read, default, effect; secrets by name only | Config files, environment reads, flag definitions |
-| `17-deployment.md` | How it is built, shipped and run per environment, and how to roll back; for a library, how it is versioned and published | CI, Dockerfiles, deploy scripts, release config |
-| `18-operations.md` | Monitoring, logs, alerts, routine tasks, limits, what to do when it breaks | Scripts, configs, dashboards, runbooks |
-| `19-known-issues.md` | Bugs, gaps, debt and security findings, each with the file that shows it | The code review done while writing |
-| `20-glossary.md` | Internal terms and acronyms, one line each | All documents |
-| `21-open-questions.md` | What the code could not answer, each with who could | The writing process |
-| `22-<topic>.md` | Deep dives that fit nowhere else | As needed |
-| `23-making-changes.md` | A cookbook: each common change with exact files, ordered steps, verification, and what else to update | Code |
-| `24-dependencies.md` | Internal module dependencies, upstream and downstream systems, data and job dependencies, the packages that matter | Imports, configs, SQL, manifests |
-| `25-change-impact-map.md` | One row per entity: defined in, read by, written by, documented in, what to check before changing | Everything above |
-| `26-security-and-access.md` | Authentication and authorisation, roles and permissions, where secrets live by name, data sensitivity, what access running and deploying needs | Auth code, IAM and policy files, configs |
-| `27-infrastructure.md` | Each cloud resource or environment: type, name, defined in which IaC file, depends on, who changes it | IaC, deployment manifests |
-| `28-interfaces-and-events.md` | Contracts: API schemas, event and message schemas, queue and topic names, versioning rules, consumers | Schema files, handlers, producers, consumers |
-| `29-models.md` | Each model: purpose, training entry point, data and features, evaluation metrics, artifact location, serving, retraining | Training and serving code, registries |
-| `30-conventions.md` | Naming, folder rules, error handling, logging, testing and review conventions as practised in this repository | The code itself |
-| `31-decisions.md` | Decisions that shaped the project and the reason for each, newest first | Commit history, existing design notes |
+| File                          | What it holds                                                                                                                                                | Source of truth in the code                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `00-overview.md`              | What the project is, for whom, its profiles, its main parts, status, owners, and the list of documents in this folder                                        | README, entry points, CODEOWNERS, the onboarding sheet |
+| `01-tech-stack.md`            | Languages, frameworks, runtimes, platforms and infrastructure, with versions                                                                                 | Manifests, lock files, Dockerfiles, CI, IaC            |
+| `02-repository-map.md`        | Every top-level directory and key file: purpose, entry points, who imports it                                                                                | The tree                                               |
+| `03-architecture.md`          | Components, how they communicate, the flow of data or requests end to end, where it runs, a diagram                                                          | Code, Dockerfiles, run scripts, configs, IaC           |
+| `04-running-locally.md`       | Prerequisites, setup, run, seed data, the failures newcomers hit                                                                                             | Run scripts, README, manifests                         |
+| `05-backend.md`               | Services and modules, their endpoints or handlers, workers, functions, what each owns                                                                        | Server and function code                               |
+| `06-frontend.md`              | Client applications: web, mobile, or a command-line surface; structure, state, how they call services                                                        | Client code                                            |
+| `07-screens-and-metrics.md`   | Each screen or command: purpose, what it shows or does, the data or calls behind it                                                                          | Client code and queries                                |
+| `08-data-model.md`            | Each table, collection, schema, dataset or artifact store: the fields that matter, keys, producers, consumers                                                | DDL, ORM models, SQL, schema files                     |
+| `09-data-lineage.md`          | Sources to outputs, per domain or per dataset                                                                                                                | Pipeline and training code, SQL                        |
+| `10-transformations.md`       | Each processing step: input, logic, output, file and function; feature engineering and training steps for models                                             | Pipeline and training code                             |
+| `11-metrics.md`               | Each metric: definition, formula, source, where computed; business metrics, model metrics or service indicators                                              | Code, dashboards as code                               |
+| `12-pipelines.md`             | Each job: DAG, cron job, workflow, scheduled function or queue consumer; file, trigger, reads, writes, order, dependencies, failure behaviour, active or not | Job definitions, schedulers, scripts, IaC triggers     |
+| `13-data-quality.md`          | Checks and validations that exist, where, what they catch, and the gaps                                                                                      | Code                                                   |
+| `14-testing.md`               | How to run the tests, what they cover, what they do not, how CI runs them                                                                                    | Test folders, CI                                       |
+| `15-integrations.md`          | Each external system: direction, protocol, authentication by name, failure modes, rate limits                                                                | Clients, configs                                       |
+| `16-configuration.md`         | Every config key, environment variable and feature flag: where read, default, effect; secrets by name only                                                   | Config files, environment reads, flag definitions      |
+| `17-deployment.md`            | How it is built, shipped and run per environment, and how to roll back; for a library, how it is versioned and published                                     | CI, Dockerfiles, deploy scripts, release config        |
+| `18-operations.md`            | Monitoring, logs, alerts, routine tasks, limits, what to do when it breaks                                                                                   | Scripts, configs, dashboards, runbooks                 |
+| `19-known-issues.md`          | Bugs, gaps, debt and security findings, each with the file that shows it                                                                                     | The code review done while writing                     |
+| `20-glossary.md`              | Internal terms and acronyms, one line each                                                                                                                   | All documents                                          |
+| `21-open-questions.md`        | What the code could not answer, each with who could                                                                                                          | The writing process                                    |
+| `22-<topic>.md`               | Deep dives that fit nowhere else                                                                                                                             | As needed                                              |
+| `23-making-changes.md`        | A cookbook: each common change with exact files, ordered steps, verification, and what else to update                                                        | Code                                                   |
+| `24-dependencies.md`          | Internal module dependencies, upstream and downstream systems, data and job dependencies, the packages that matter                                           | Imports, configs, SQL, manifests                       |
+| `25-change-impact-map.md`     | One row per entity: defined in, read by, written by, documented in, what to check before changing                                                            | Everything above                                       |
+| `26-security-and-access.md`   | Authentication and authorisation, roles and permissions, where secrets live by name, data sensitivity, what access running and deploying needs               | Auth code, IAM and policy files, configs               |
+| `27-infrastructure.md`        | Each cloud resource or environment: type, name, defined in which IaC file, depends on, who changes it                                                        | IaC, deployment manifests                              |
+| `28-interfaces-and-events.md` | Contracts: API schemas, event and message schemas, queue and topic names, versioning rules, consumers                                                        | Schema files, handlers, producers, consumers           |
+| `29-models.md`                | Each model: purpose, training entry point, data and features, evaluation metrics, artifact location, serving, retraining                                     | Training and serving code, registries                  |
+| `30-conventions.md`           | Naming, folder rules, error handling, logging, testing and review conventions as practised in this repository                                                | The code itself                                        |
+| `31-decisions.md`             | Decisions that shaped the project and the reason for each, newest first                                                                                      | Commit history, existing design notes                  |
 
 ### Which documents each profile writes
 
 R is required, P is written if the project has that part, and a dash means not applicable. A project with several profiles takes the strongest mark across them.
 
-| File | service | web | mobile | pipeline | ml | infra | library | serverless |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 00 overview | R | R | R | R | R | R | R | R |
-| 01 tech stack | R | R | R | R | R | R | R | R |
-| 02 repository map | R | R | R | R | R | R | R | R |
-| 03 architecture | R | R | R | R | R | R | R | R |
-| 04 running locally | R | R | R | R | R | R | R | R |
-| 05 backend | R | P | – | P | P | – | – | R |
-| 06 frontend | P | R | R | – | – | – | R | – |
-| 07 screens and metrics | P | R | R | – | – | – | P | – |
-| 08 data model | R | P | P | R | R | – | – | P |
-| 09 data lineage | – | – | – | R | R | – | – | P |
-| 10 transformations | – | – | – | R | R | – | – | P |
-| 11 metrics | P | P | P | P | R | – | – | P |
-| 12 pipelines | P | – | – | R | R | P | – | R |
-| 13 data quality | – | – | – | R | R | – | – | – |
-| 14 testing | R | R | R | R | R | R | R | R |
-| 15 integrations | P | P | P | P | P | P | P | P |
-| 16 configuration | R | R | R | R | R | R | R | R |
-| 17 deployment | R | R | R | R | R | R | R | R |
-| 18 operations | R | R | R | R | R | R | P | R |
-| 19 known issues | R | R | R | R | R | R | R | R |
-| 20 glossary | R | R | R | R | R | R | R | R |
-| 21 open questions | R | R | R | R | R | R | R | R |
-| 23 making changes | R | R | R | R | R | R | R | R |
-| 24 dependencies | R | R | R | R | R | R | R | R |
-| 25 change impact map | R | R | R | R | R | R | R | R |
-| 26 security and access | R | R | R | R | R | R | R | R |
-| 27 infrastructure | P | P | – | P | P | R | – | R |
-| 28 interfaces and events | R | P | P | P | P | – | R | R |
-| 29 models | – | – | – | – | R | – | – | – |
-| 30 conventions | R | R | R | R | R | R | R | R |
-| 31 decisions | P | P | P | P | P | P | P | P |
+| File                     | service | web | mobile | pipeline | ml  | infra | library | serverless |
+| ------------------------ | ------- | --- | ------ | -------- | --- | ----- | ------- | ---------- |
+| 00 overview              | R       | R   | R      | R        | R   | R     | R       | R          |
+| 01 tech stack            | R       | R   | R      | R        | R   | R     | R       | R          |
+| 02 repository map        | R       | R   | R      | R        | R   | R     | R       | R          |
+| 03 architecture          | R       | R   | R      | R        | R   | R     | R       | R          |
+| 04 running locally       | R       | R   | R      | R        | R   | R     | R       | R          |
+| 05 backend               | R       | P   | –      | P        | P   | –     | –       | R          |
+| 06 frontend              | P       | R   | R      | –        | –   | –     | R       | –          |
+| 07 screens and metrics   | P       | R   | R      | –        | –   | –     | P       | –          |
+| 08 data model            | R       | P   | P      | R        | R   | –     | –       | P          |
+| 09 data lineage          | –       | –   | –      | R        | R   | –     | –       | P          |
+| 10 transformations       | –       | –   | –      | R        | R   | –     | –       | P          |
+| 11 metrics               | P       | P   | P      | P        | R   | –     | –       | P          |
+| 12 pipelines             | P       | –   | –      | R        | R   | P     | –       | R          |
+| 13 data quality          | –       | –   | –      | R        | R   | –     | –       | –          |
+| 14 testing               | R       | R   | R      | R        | R   | R     | R       | R          |
+| 15 integrations          | P       | P   | P      | P        | P   | P     | P       | P          |
+| 16 configuration         | R       | R   | R      | R        | R   | R     | R       | R          |
+| 17 deployment            | R       | R   | R      | R        | R   | R     | R       | R          |
+| 18 operations            | R       | R   | R      | R        | R   | R     | P       | R          |
+| 19 known issues          | R       | R   | R      | R        | R   | R     | R       | R          |
+| 20 glossary              | R       | R   | R      | R        | R   | R     | R       | R          |
+| 21 open questions        | R       | R   | R      | R        | R   | R     | R       | R          |
+| 23 making changes        | R       | R   | R      | R        | R   | R     | R       | R          |
+| 24 dependencies          | R       | R   | R      | R        | R   | R     | R       | R          |
+| 25 change impact map     | R       | R   | R      | R        | R   | R     | R       | R          |
+| 26 security and access   | R       | R   | R      | R        | R   | R     | R       | R          |
+| 27 infrastructure        | P       | P   | –      | P        | P   | R     | –       | R          |
+| 28 interfaces and events | R       | P   | P      | P        | P   | –     | R       | R          |
+| 29 models                | –       | –   | –      | –        | R   | –     | –       | –          |
+| 30 conventions           | R       | R   | R      | R        | R   | R     | R       | R          |
+| 31 decisions             | P       | P   | P      | P        | P   | P     | P       | P          |
 
 ## 5. Front matter: the header every document starts with
 
@@ -151,17 +151,17 @@ tickets: []
 ---
 ```
 
-| Field | Rule |
-| --- | --- |
-| `project` | The slug the onboarding sheet uses for this project. Lumos filters retrieval on it |
-| `doc`, `title` | The file name without extension, and the human title. The H1 of the document repeats the title |
-| `profiles` | The project's profiles from section 3, the same list in every document of the set |
-| `component` | One word from the list, so a question about pipelines can prefer pipeline documents |
-| `owners` | Email addresses or a team alias. The mentor names these when it cannot answer. Taken from CODEOWNERS, the README or the sheet; `TBD` when none exists, and then listed in `21-open-questions.md` |
-| `status`, `verified_commit`, `verified_on` | `verified` means every claim was checked against that commit; `partial` means some sections are marked Unverified; `draft` means generated and not yet reviewed |
-| `code_paths` | Every file or directory the document relies on, relative to the repository root. Each must exist at `verified_commit` |
+| Field                                                      | Rule                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project`                                                  | The slug the onboarding sheet uses for this project. Lumos filters retrieval on it                                                                                                                                                                                    |
+| `doc`, `title`                                             | The file name without extension, and the human title. The H1 of the document repeats the title                                                                                                                                                                        |
+| `profiles`                                                 | The project's profiles from section 3, the same list in every document of the set                                                                                                                                                                                     |
+| `component`                                                | One word from the list, so a question about pipelines can prefer pipeline documents                                                                                                                                                                                   |
+| `owners`                                                   | Email addresses or a team alias. The mentor names these when it cannot answer. Taken from CODEOWNERS, the README or the sheet; `TBD` when none exists, and then listed in `21-open-questions.md`                                                                      |
+| `status`, `verified_commit`, `verified_on`                 | `verified` means every claim was checked against that commit; `partial` means some sections are marked Unverified; `draft` means generated and not yet reviewed                                                                                                       |
+| `code_paths`                                               | Every file or directory the document relies on, relative to the repository root. Each must exist at `verified_commit`                                                                                                                                                 |
 | `tables`, `jobs`, `apis`, `events`, `configs`, `resources` | The entities the document describes, spelled exactly as they appear in code: `schema.table` or a dataset path; a job, DAG or function id; `METHOD /path`; a topic or queue name; a key or variable name; an IaC resource name. Empty lists when a kind does not apply |
-| `tickets` | Issue keys the document relates to, when known |
+| `tickets`                                                  | Issue keys the document relates to, when known                                                                                                                                                                                                                        |
 
 ## 6. Writing rules
 
@@ -305,14 +305,14 @@ Per model:
 
 `25-change-impact-map.md` is a single table, one row per entity, sorted by kind then name. It is the document the mentor reads first for any "what will this affect" question, and the one that most repays care. The example rows use placeholder names.
 
-| Entity | Kind | Defined in | Read by | Written by | Documented in | Before changing |
-| --- | --- | --- | --- | --- | --- | --- |
-| `analytics.daily_orders` | table | `db/migrations/012_daily_orders.sql` | `src/api/reports.py`, dashboard | `nightly_report` job | 08, 09, 12 | the dashboard query assumes one row per day |
-| `nightly_report` | job | `src/jobs/nightly_report.py` | operations runbook | — | 12, 23 | schedule lives in `infra/schedules.tf`, not in the job |
-| `POST /orders` | api | `src/api/orders.py` | web app, mobile app | — | 05, 28 | versioned contract; consumers pinned to v2 |
-| `orders.created` | event | `src/events/producers.py` | `src/consumers/fulfilment.py` | `POST /orders` handler | 28 | schema change needs both producer and consumer |
-| `APP_DB_URL` | config | `src/settings.py` | every service | — | 16, 26 | rotating it restarts all services |
-| `aws_lambda_function.nightly_report` | resource | `infra/jobs.tf` | — | — | 27 | memory and timeout set here, not in code |
+| Entity                               | Kind     | Defined in                           | Read by                         | Written by             | Documented in | Before changing                                        |
+| ------------------------------------ | -------- | ------------------------------------ | ------------------------------- | ---------------------- | ------------- | ------------------------------------------------------ |
+| `analytics.daily_orders`             | table    | `db/migrations/012_daily_orders.sql` | `src/api/reports.py`, dashboard | `nightly_report` job   | 08, 09, 12    | the dashboard query assumes one row per day            |
+| `nightly_report`                     | job      | `src/jobs/nightly_report.py`         | operations runbook              | —                      | 12, 23        | schedule lives in `infra/schedules.tf`, not in the job |
+| `POST /orders`                       | api      | `src/api/orders.py`                  | web app, mobile app             | —                      | 05, 28        | versioned contract; consumers pinned to v2             |
+| `orders.created`                     | event    | `src/events/producers.py`            | `src/consumers/fulfilment.py`   | `POST /orders` handler | 28            | schema change needs both producer and consumer         |
+| `APP_DB_URL`                         | config   | `src/settings.py`                    | every service                   | —                      | 16, 26        | rotating it restarts all services                      |
+| `aws_lambda_function.nightly_report` | resource | `infra/jobs.tf`                      | —                               | —                      | 27            | memory and timeout set here, not in code               |
 
 Kinds: `table`, `dataset`, `job`, `task`, `api`, `event`, `queue`, `service`, `module`, `screen`, `config`, `flag`, `secret` by name only, `resource`, `model`, `external`, `file`. "Documented in" lists document numbers. "Before changing" is one line: the check or the trap.
 
@@ -334,18 +334,18 @@ In the repository, under `docs/onboarding/`, on the branch the onboarding sheet 
 
 A document set is correct at `verified_commit` and drifts from there. The rule is that the pull request which changes a thing updates the document that describes it, and the reviewer checks it did. Lumos flags a document that names a symbol or path no longer present in the code, but a wrong schedule or a renamed table is only caught by this rule.
 
-| When a pull request changes | Update |
-| --- | --- |
-| A job, schedule, trigger or consumer | `12-pipelines.md`, `25-change-impact-map.md`; `23-making-changes.md` if a recipe changed |
-| A table, field, dataset or model artifact | `08-data-model.md`, `09-data-lineage.md`, `29-models.md`, `25-change-impact-map.md` |
-| An endpoint, event, screen or integration | `05`, `06`, `07`, `15` or `28` as applicable, `25-change-impact-map.md` |
-| A config key, flag, secret location or permission | `16-configuration.md`, `26-security-and-access.md`, `25-change-impact-map.md` |
-| A cloud resource or environment | `27-infrastructure.md`, `17-deployment.md`, `25-change-impact-map.md` |
-| A dependency, runtime or framework version | `01-tech-stack.md`, `24-dependencies.md` |
-| Build, deploy or operations | `17-deployment.md`, `18-operations.md` |
-| Anything that answers an open question or fixes a known issue | `21-open-questions.md`, `19-known-issues.md` |
-| A convention or a design decision | `30-conventions.md`, `31-decisions.md` |
-| Every change | `verified_commit` and `verified_on` on the documents touched |
+| When a pull request changes                                   | Update                                                                                   |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| A job, schedule, trigger or consumer                          | `12-pipelines.md`, `25-change-impact-map.md`; `23-making-changes.md` if a recipe changed |
+| A table, field, dataset or model artifact                     | `08-data-model.md`, `09-data-lineage.md`, `29-models.md`, `25-change-impact-map.md`      |
+| An endpoint, event, screen or integration                     | `05`, `06`, `07`, `15` or `28` as applicable, `25-change-impact-map.md`                  |
+| A config key, flag, secret location or permission             | `16-configuration.md`, `26-security-and-access.md`, `25-change-impact-map.md`            |
+| A cloud resource or environment                               | `27-infrastructure.md`, `17-deployment.md`, `25-change-impact-map.md`                    |
+| A dependency, runtime or framework version                    | `01-tech-stack.md`, `24-dependencies.md`                                                 |
+| Build, deploy or operations                                   | `17-deployment.md`, `18-operations.md`                                                   |
+| Anything that answers an open question or fixes a known issue | `21-open-questions.md`, `19-known-issues.md`                                             |
+| A convention or a design decision                             | `30-conventions.md`, `31-decisions.md`                                                   |
+| Every change                                                  | `verified_commit` and `verified_on` on the documents touched                             |
 
 Re-verify the whole set against the current branch head every quarter, or when the sheet row's branch changes. The prompt in section 11 does this when run on an existing set: it keeps what still holds, marks what it cannot verify, and reports the difference.
 
@@ -410,19 +410,19 @@ When the run finishes, read `21-open-questions.md` and `19-known-issues.md` firs
 
 ## Appendix A. How saturam-cli reads these documents
 
-Everything above is a contract with the terminal side of Lumos, `sat-cli onboard`. This appendix lists what the CLI relies on and the order in which the CLI work lands, so the two sides stay aligned. The full plan with phases, tools and evaluation is the Mentor Agent Implementation Plan; this is the part that touches the documents.
+Everything above is a contract with the terminal side of Lumos, `sat-cli lumos`. This appendix lists what the CLI relies on and the order in which the CLI work lands, so the two sides stay aligned. The full plan with phases, tools and evaluation is the Mentor Agent Implementation Plan; this is the part that touches the documents.
 
-| Document feature | What the CLI does with it | Lands in |
-| --- | --- | --- |
-| `docs/onboarding/` in the repository | Indexed as prose beside the code; `search_documentation(kind)` searches prose and code separately | Phase 1 |
-| Front matter `project` | Already the retrieval filter; unchanged | Today |
-| Front matter `profiles` and `component` | Lets the mentor prefer the right document kind for a question, and tell a user which parts a project has | Phase 1 |
+| Document feature                                                                      | What the CLI does with it                                                                                                                                    | Lands in                        |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `docs/onboarding/` in the repository                                                  | Indexed as prose beside the code; `search_documentation(kind)` searches prose and code separately                                                            | Phase 1                         |
+| Front matter `project`                                                                | Already the retrieval filter; unchanged                                                                                                                      | Today                           |
+| Front matter `profiles` and `component`                                               | Lets the mentor prefer the right document kind for a question, and tell a user which parts a project has                                                     | Phase 1                         |
 | Front matter `code_paths`, `tables`, `jobs`, `apis`, `events`, `configs`, `resources` | The pipeline writes them into the document's metadata sidecar and into a mentions index; the mentor's `find_references` returns documents beside code usages | Phase 2 pipeline, Phase 3 tools |
-| `## Related code` sections | The identifier guard accepts paths a retrieved document names, so a correct path is not revised out of an answer | Phase 1 |
-| `25-change-impact-map.md` | Read whole by `read_document` as the first step of a change plan; its rows seed the relationship graph | Phase 2 |
-| `23-making-changes.md` | The recipe nearest to a requested change is the template the plan follows; for a new feature, the nearest existing feature's footprint | Phase 2 |
-| `21-open-questions.md`, `owners` | What the mentor says when it does not know, and whom it names | Phase 1 |
-| `verified_commit` | Compared with the indexed commit; the mentor says when a document is older than the code | Phase 3 |
+| `## Related code` sections                                                            | The identifier guard accepts paths a retrieved document names, so a correct path is not revised out of an answer                                             | Phase 1                         |
+| `25-change-impact-map.md`                                                             | Read whole by `read_document` as the first step of a change plan; its rows seed the relationship graph                                                       | Phase 2                         |
+| `23-making-changes.md`                                                                | The recipe nearest to a requested change is the template the plan follows; for a new feature, the nearest existing feature's footprint                       | Phase 2                         |
+| `21-open-questions.md`, `owners`                                                      | What the mentor says when it does not know, and whom it names                                                                                                | Phase 1                         |
+| `verified_commit`                                                                     | Compared with the indexed commit; the mentor says when a document is older than the code                                                                     | Phase 3                         |
 
 ### Order of work on the terminal side
 
@@ -480,4 +480,3 @@ Also update: `12-pipelines.md` (trigger), `25-change-impact-map.md` (`nightly_re
 | `APP_DB_PASSWORD` | the deployment's secret store, injected as an environment variable | `src/settings.py` | manual; every service restarts on change |
 | `PAYMENTS_API_KEY` | hardcoded in `src/payments/client.py` (see 19-known-issues) | `src/payments/client.py` | none; must move to the secret store |
 ```
-

@@ -15,7 +15,7 @@ import { stripInlineCitations } from "../utils/citations.util";
 import { slugify } from "../utils/slug.util";
 import { TypedCommand, TypedInputs } from "./base";
 
-const logger = getLogger("OnboardCommand");
+const logger = getLogger("LumosCommand");
 
 const INPUTS = [
     {
@@ -58,16 +58,16 @@ const INPUTS = [
  * on a schedule and off a Google Sheet, so it no longer needs a developer to run it by hand.
  * What is left here is the half a developer actually invokes: asking the indexed corpus questions.
  *
- * Bare `sat-cli onboard` is the chat. `--knowledge-base` swaps it for the raw retrieval inspector,
+ * Bare `sat-cli lumos` is the chat. `--knowledge-base` swaps it for the raw retrieval inspector,
  * which is a debugging tool rather than a way to get answers.
  */
 @Service()
-export class OnboardCommand implements TypedCommand<typeof INPUTS> {
-    readonly name = "onboard";
+export class LumosCommand implements TypedCommand<typeof INPUTS> {
+    readonly name = "lumos";
     readonly description =
         "Chat with a mentor about your projects, grounded in the indexed onboarding documentation (needs an AI/LLM provider and a Bedrock Knowledge Base from 'sat-cli init'); --knowledge-base shows raw retrieval results instead";
     readonly category = "common" as const;
-    readonly aliases = ["ob", "onboarding"];
+    readonly aliases = ["onboard", "ob", "onboarding"];
     readonly inputs = INPUTS;
 
     constructor(
@@ -92,7 +92,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         if (scoped.length > 0) {
             const flags = scoped.map((flag) => `--${flag}`).join(", ");
             throw new Error(
-                `${flags} applies only to --knowledge-base. The chat determines the project automatically per question and searches documentation and code as the question needs, so run \`sat-cli onboard\` without it.`,
+                `${flags} applies only to --knowledge-base. The chat determines the project automatically per question and searches documentation and code as the question needs, so run \`sat-cli lumos\` without it.`,
             );
         }
 
@@ -132,7 +132,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
             throw err;
         }
         const trimmed = typeof question === "string" ? question.trim() : "";
-        if (!trimmed || OnboardCommand.KB_EXIT_COMMANDS.has(trimmed.toLowerCase())) {
+        if (!trimmed || LumosCommand.KB_EXIT_COMMANDS.has(trimmed.toLowerCase())) {
             return null;
         }
         return trimmed;
@@ -145,7 +145,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
 
         let frameIndex = 0;
         const render = () => {
-            const frame = OnboardCommand.LOADING_FRAMES[frameIndex % OnboardCommand.LOADING_FRAMES.length];
+            const frame = LumosCommand.LOADING_FRAMES[frameIndex % LumosCommand.LOADING_FRAMES.length];
             process.stderr.write(`\r${frame} ${message}...`);
             frameIndex += 1;
         };
@@ -276,7 +276,7 @@ export class OnboardCommand implements TypedCommand<typeof INPUTS> {
         if (!hasLlm) {
             logger.warn("No AI/LLM provider is configured yet.");
             logger.info(
-                "Run 'sat-cli init' and select 'AI / LLM providers' to configure one (Anthropic, OpenAI, Gemini, Bedrock, etc.), then try 'sat-cli onboard' again.",
+                "Run 'sat-cli init' and select 'AI / LLM providers' to configure one (Anthropic, OpenAI, Gemini, Bedrock, etc.), then try 'sat-cli lumos' again.",
             );
             return;
         }

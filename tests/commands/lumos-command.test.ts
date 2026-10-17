@@ -1,5 +1,5 @@
 import { input, select } from "@inquirer/prompts";
-import { OnboardCommand } from "../../src/commands/onboard-command";
+import { LumosCommand } from "../../src/commands/lumos-command";
 import { ConfigService } from "../../src/services/config-service";
 import { KnowledgeBaseChatService } from "../../src/services/knowledge/knowledge-base-chat.service";
 import { AnswerFlowService } from "../../src/services/knowledge/answer-flow.service";
@@ -9,8 +9,8 @@ jest.mock("@inquirer/prompts", () => ({
     select: jest.fn(),
 }));
 
-describe("OnboardCommand Mode Routing", () => {
-    let command: OnboardCommand;
+describe("LumosCommand Mode Routing", () => {
+    let command: LumosCommand;
     let mockConfigService: jest.Mocked<ConfigService>;
     let mockChatService: jest.Mocked<KnowledgeBaseChatService>;
     let mockAnswerFlow: jest.Mocked<AnswerFlowService>;
@@ -49,7 +49,7 @@ describe("OnboardCommand Mode Routing", () => {
             ask: jest.fn().mockResolvedValue({ answer: "Here is the answer.", chunks: [] }),
         } as any;
 
-        command = new OnboardCommand(mockConfigService, mockChatService, mockAnswerFlow);
+        command = new LumosCommand(mockConfigService, mockChatService, mockAnswerFlow);
     });
 
     describe("--knowledge-base interactive search", () => {
@@ -157,7 +157,7 @@ describe("OnboardCommand Mode Routing", () => {
         });
     });
 
-    describe("the chat (bare `sat-cli onboard`)", () => {
+    describe("the chat (bare `sat-cli lumos`)", () => {
         const chatInputs = {} as const;
 
         it("shows a setup suggestion and skips everything else when no LLM provider is configured", async () => {
